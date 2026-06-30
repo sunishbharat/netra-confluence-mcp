@@ -9,7 +9,7 @@ services:
     env_file:
       - .env
     environment:
-      - SERVER_TRANSPORT=streamable-http
+      - SERVER_TRANSPORT=http
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8765
     healthcheck:

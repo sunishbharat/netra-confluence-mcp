@@ -116,17 +116,17 @@ Use `uv run python server.py` as the server command with the project directory a
 
 ---
 
-## Production transport (streamable-http)
+## Production transport (http)
 
 For cloud or shared deployment the server runs standalone as a web service instead of being spawned as a child process - one server process serves many clients over HTTP. Every tool call here is a single, independent read-transform-write against Confluence (there is no clarification loop or multi-turn session), so the server runs **stateless**: no session store, no Valkey, nothing to keep in memory between requests.
 
 Start it in HTTP mode:
 
 ```bash
-SERVER_TRANSPORT=streamable-http uv run python server.py
+SERVER_TRANSPORT=http uv run python server.py
 ```
 
-(Or set `SERVER_TRANSPORT=streamable-http` in `.env` instead.) `main()` in `server.py` reads the settings, sets `stateless_http=True` automatically for this transport, and starts uvicorn bound to `127.0.0.1:8765` by default. The `/mcp` path is FastMCP's default endpoint for the streamable-http protocol:
+(Or set `SERVER_TRANSPORT=http` in `.env` instead.) `main()` in `server.py` reads the settings and passes `host`, `port`, and `stateless_http=True` directly to FastMCP's `run()` for this transport, starting uvicorn bound to `127.0.0.1:8765` by default. The `/mcp` path is FastMCP's default endpoint for the streamable HTTP protocol:
 
 ```
 http://127.0.0.1:8765/mcp
@@ -214,6 +214,20 @@ When to use this recipe:
 You can also pass a full Confluence URL instead of a bare page ID - the AI will extract the ID:
 
 > "Show me the JQL on https://your-org.atlassian.net/wiki/spaces/ENG/pages/34334/R1.0-Report"
+
+### Controlling the output format
+
+The tool always returns the full JSON shape (with `status`, `page_id`, `title`, `jira_macro_count`, `jql_queries`, and `unique_strings`). The agent has the full response in its context but can choose to show you only the JQL strings. So:
+
+| Your prompt | What the agent shows you |
+|---|---|
+| "Show me all the JQL queries on page 34334." | The full JSON dump (default behavior, what we documented in the recipe above) |
+| "List just the JQL strings on page 34334." | A plain list of only the `jql` field values |
+| "Show me the JQL queries on page 34334 as a bullet list." | One bullet per JQL, no metadata |
+| "Show me only the JQLs and nothing else from page 34334." | Same as above, with explicit instruction to suppress the rest |
+| "Give me a markdown table of the JQL queries on page 34334." | A formatted table - the agent can decide which columns to include |
+
+A competent MCP client (Claude, Rovo) will honor all of these. The user always sees what they asked for.
 
 ---
 

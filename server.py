@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 import structlog
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -53,17 +53,23 @@ def _configure_logging(*, json_logs: bool, log_level: str) -> None:
 if __name__ == "__main__":
     settings = NetraSettings()  # type: ignore[call-arg]  # fields read from env
     _configure_logging(json_logs=settings.json_logs, log_level=settings.log_level)
-    server.settings.host = settings.server_host
-    server.settings.port = settings.server_port
-    # Every tool call is an independent read-transform-write against Confluence - there is
-    # no per-session state to keep, so streamable-http always runs stateless (no session
-    # affinity required, safe to scale horizontally behind the CF router).
-    server.settings.stateless_http = settings.server_transport == "streamable-http"
+    # FastMCP 2.x takes host/port/stateless_http as run() kwargs rather than constructor
+    # or post-construction settings; run_stdio_async() doesn't accept them at all, so they
+    # are only passed for the http transport.
+    run_kwargs: dict[str, object] = {"transport": settings.server_transport}
+    if settings.server_transport == "http":
+        # Every tool call is an independent read-transform-write against Confluence - there
+        # is no per-session state to keep, so http transport always runs stateless (no
+        # session affinity required, safe to scale horizontally behind the CF router).
+        run_kwargs.update(
+            host=settings.server_host,
+            port=settings.server_port,
+            stateless_http=True,
+        )
     logger.info(
         "server_starting",
         transport=settings.server_transport,
         host=settings.server_host,
         port=settings.server_port,
-        stateless_http=server.settings.stateless_http,
     )
-    server.run(transport=settings.server_transport)
+    server.run(**run_kwargs)

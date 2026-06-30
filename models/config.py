@@ -15,12 +15,12 @@ class NetraSettings(BaseSettings):
     json_logs: bool = Field(
         default=False, description="Emit JSON log lines (production/CF) instead of console format"
     )
-    server_transport: Literal["stdio", "streamable-http"] = Field(
+    server_transport: Literal["stdio", "http"] = Field(
         default="stdio",
         description="stdio for local MCP clients (Claude Desktop, CLI); "
-        "streamable-http for CF/HTTP deployment",
+        "http for CF/HTTP deployment (FastMCP's streamable HTTP transport)",
     )
-    server_host: str = Field(default="127.0.0.1", description="Bind host for streamable-http")
-    server_port: int = Field(default=8765, description="Bind port for streamable-http")
+    server_host: str = Field(default="127.0.0.1", description="Bind host for http transport")
+    server_port: int = Field(default=8765, description="Bind port for http transport")
 
     model_config = {"env_file": ".env", "extra": "forbid"}
