@@ -1,0 +1,6 @@
+httpx>=0.27
+mcp[server]>=1.0
+pydantic>=2.7
+pydantic-settings>=2.3
+structlog>=24.0
+tenacity>=8.3

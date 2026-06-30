@@ -1,0 +1,19 @@
+# Ignore all dotfiles and dot-directories by default
+.*
+!.env.example
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Dev / test artifacts - not needed in the image
+tests/
+docs/
+
+# Tooling
+*.md
+requirements.txt

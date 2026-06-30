@@ -1,0 +1,141 @@
+{
+  "type": "doc",
+  "version": 1,
+  "content": [
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "R1.0 Release Report for ProjectX."
+        },
+        {
+          "type": "mention",
+          "attrs": {
+            "id": "user-account-abc123",
+            "text": "@Jane"
+          }
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "attrs": {
+        "isNumberColumnEnabled": false,
+        "layout": "default"
+      },
+      "content": [
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableHeader",
+              "attrs": {},
+              "content": [
+                {
+                  "type": "paragraph",
+                  "content": [
+                    {
+                      "type": "text",
+                      "text": "R1.0 Planned Issues"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableCell",
+              "attrs": {},
+              "content": [
+                {
+                  "type": "extension",
+                  "attrs": {
+                    "extensionType": "com.atlassian.confluence.macro.core",
+                    "extensionKey": "jira",
+                    "parameters": {
+                      "macroParams": {
+                        "jqlQuery": {
+                          "value": "project = MYPROJ AND \"Planned Version\" = ver_R1.0 AND status != Done"
+                        },
+                        "columns": {
+                          "value": "type,key,summary,status,R1.0"
+                        },
+                        "server": {
+                          "value": "MyJira"
+                        },
+                        "maximumIssues": {
+                          "value": "20"
+                        }
+                      },
+                      "macroMetadata": {
+                        "macroId": {
+                          "value": "macro-id-001"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "tableRow",
+          "content": [
+            {
+              "type": "tableCell",
+              "attrs": {},
+              "content": [
+                {
+                  "type": "extension",
+                  "attrs": {
+                    "extensionType": "com.atlassian.confluence.macro.core",
+                    "extensionKey": "jira",
+                    "parameters": {
+                      "macroParams": {
+                        "jqlQuery": {
+                          "value": "project = MYPROJ AND label = ver_R1.0_Baseline AND fixVersion = R1.0"
+                        },
+                        "columns": {
+                          "value": "type,key,summary"
+                        },
+                        "server": {
+                          "value": "MyJira"
+                        }
+                      },
+                      "macroMetadata": {
+                        "macroId": {
+                          "value": "macro-id-002"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "paragraph",
+      "content": [
+        {
+          "type": "text",
+          "text": "Delivery date: "
+        },
+        {
+          "type": "date",
+          "attrs": {
+            "timestamp": "1778025600000"
+          }
+        }
+      ]
+    }
+  ]
+}

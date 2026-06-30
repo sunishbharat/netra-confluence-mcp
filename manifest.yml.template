@@ -1,0 +1,22 @@
+applications:
+  - name: netra-confluence-mcp
+    docker:
+      image: DOCKER_IMAGE_TAG
+    memory: 256M
+    disk_quota: 256M
+    instances: 1
+    health-check-type: http
+    health-check-http-endpoint: /health
+    health-check-invocation-timeout: 30
+    env:
+      SERVER_TRANSPORT: streamable-http
+      SERVER_HOST: "0.0.0.0"
+      JSON_LOGS: "true"
+      # Confluence credentials - set via `cf set-env`, never committed here
+      # CONFLUENCE_BASE_URL: https://your-org.atlassian.net
+      # CONFLUENCE_API_TOKEN: ((vault-confluence-token))
+      # CONFLUENCE_USER_EMAIL: service-account@example.com
+      # CONFLUENCE_SITE_URL: https://your-org.atlassian.net
+
+# PORT is injected by CF at runtime; docker/entrypoint.sh maps it to SERVER_PORT.
+# Do not hardcode SERVER_PORT above.
