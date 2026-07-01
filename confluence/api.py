@@ -28,6 +28,7 @@ async def read_page(client: ConfluenceClient, page_id: str) -> PageContent:
     return PageContent(
         id=str(data["id"]),
         title=str(data["title"]),
+        # object -> str -> int: mypy --strict rejects int(object) directly.
         version=int(str(version["number"])),
         space_id=str(data["spaceId"]),
         status=str(data["status"]),
@@ -43,15 +44,14 @@ async def get_page_metadata(client: ConfluenceClient, page_id: str) -> PageMetad
     return PageMetadata(
         id=str(data["id"]),
         title=str(data["title"]),
+        # object -> str -> int: mypy --strict rejects int(object) directly.
         version=int(str(version["number"])),
         space_id=str(data["spaceId"]),
         status=str(data["status"]),
     )
 
 
-async def update_page(
-    client: ConfluenceClient, request: UpdatePageRequest
-) -> PageMetadata:
+async def update_page(client: ConfluenceClient, request: UpdatePageRequest) -> PageMetadata:
     payload = {
         "id": request.page_id,
         "status": request.status,
@@ -72,15 +72,14 @@ async def update_page(
     return PageMetadata(
         id=str(data["id"]),
         title=str(data["title"]),
+        # object -> str -> int: mypy --strict rejects int(object) directly.
         version=int(str(version["number"])),
         space_id=str(data["spaceId"]),
         status=str(data["status"]),
     )
 
 
-async def create_page(
-    client: ConfluenceClient, request: CreatePageRequest
-) -> PageMetadata:
+async def create_page(client: ConfluenceClient, request: CreatePageRequest) -> PageMetadata:
     payload: dict[str, object] = {
         "spaceId": request.space_id,
         "status": request.status,
@@ -99,6 +98,7 @@ async def create_page(
     return PageMetadata(
         id=str(data["id"]),
         title=str(data["title"]),
+        # object -> str -> int: mypy --strict rejects int(object) directly.
         version=int(str(version["number"])),
         space_id=str(data["spaceId"]),
         status=str(data["status"]),

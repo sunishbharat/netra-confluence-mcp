@@ -5,21 +5,20 @@ import uuid
 
 from confluence.adf.walker import AdfWalker
 from models.adf import ChangeLogEntry, ReplacementRule
+from models.types import AdfNode
 
 
 class AdfReplacer:
     def __init__(self, rules: list[ReplacementRule]) -> None:
         self._rules = sorted(rules, key=lambda r: len(r.old), reverse=True)
 
-    def apply(
-        self, adf: dict, title: str  # type: ignore[type-arg]
-    ) -> tuple[dict, str, list[ChangeLogEntry]]:  # type: ignore[type-arg]
+    def apply(self, adf: AdfNode, title: str) -> tuple[AdfNode, str, list[ChangeLogEntry]]:
         """
         Returns (new_adf, new_title, change_log).
 
         Always works on a deep copy - the caller's original ADF is never mutated.
         """
-        new_adf: dict = copy.deepcopy(adf)  # type: ignore[type-arg]
+        new_adf: AdfNode = copy.deepcopy(adf)
         new_title = title
         change_log: list[ChangeLogEntry] = []
 
@@ -39,13 +38,21 @@ class AdfReplacer:
 
     def _apply_rule_to_adf(
         self,
-        adf: dict,  # type: ignore[type-arg]
+        adf: AdfNode,
         rule: ReplacementRule,
         change_log: list[ChangeLogEntry],
     ) -> None:
-        def visitor(node: dict, path: list[str]) -> None:  # type: ignore[type-arg]
+        def visitor(node: AdfNode, path: list[str]) -> None:
             node_type = node.get("type", "")
 
+            # AdfWalker.walk() always recurses into a node's children regardless
+            # of what the visitor does or returns, so this early return does not
+            # prune traversal into the mention's own attrs subtree - it only
+            # skips the mutation branches below for this one visitor call. It
+            # works today because nothing under attrs.id/attrs.text has a "type"
+            # key that matches "text" or "extension". A new mutation branch
+            # added here must independently guard against descending into a
+            # mention subtree; this check alone will not protect it.
             if node_type == "mention":
                 return
 
@@ -96,8 +103,8 @@ class AdfReplacer:
         AdfWalker.walk(adf, visitor)
 
     @staticmethod
-    def _regenerate_macro_ids(adf: dict) -> None:  # type: ignore[type-arg]
-        def visitor(node: dict, path: list[str]) -> None:  # type: ignore[type-arg]
+    def _regenerate_macro_ids(adf: AdfNode) -> None:
+        def visitor(node: AdfNode, path: list[str]) -> None:
             if node.get("type") == "extension":
                 attrs = node.get("attrs", {})
                 params = attrs.get("parameters", {})

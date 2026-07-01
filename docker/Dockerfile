@@ -36,7 +36,7 @@ COPY confluence/    ./confluence/
 COPY models/        ./models/
 
 # Baked-in defaults (all overridable via env vars; SERVER_PORT set in entrypoint.sh)
-ENV SERVER_TRANSPORT=streamable-http \
+ENV SERVER_TRANSPORT=http \
     SERVER_HOST=0.0.0.0 \
     JSON_LOGS=true \
     PYTHONUNBUFFERED=1 \

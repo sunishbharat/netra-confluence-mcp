@@ -27,6 +27,10 @@ class ConfluenceClient:
                 "Accept": "application/json",
                 "Content-Type": "application/json",
             },
+            # httpx's 5s default is too tight for large ADF payloads (the R1.0
+            # report alone is 43 Jira macros); connect timeout stays short so a
+            # dead host still fails fast.
+            timeout=httpx.Timeout(30.0, connect=10.0),
         )
 
     @property
@@ -34,19 +38,32 @@ class ConfluenceClient:
         return self._settings.confluence_site_url
 
     async def get(self, path: str, **kwargs: Any) -> httpx.Response:  # noqa: ANN401
-        response = await self._http.get(path, **kwargs)
+        response = await self._request("GET", path, **kwargs)
         self._raise_for_status(response)
         return response
 
     async def put(self, path: str, **kwargs: Any) -> httpx.Response:  # noqa: ANN401
-        response = await self._http.put(path, **kwargs)
+        response = await self._request("PUT", path, **kwargs)
         self._raise_for_status(response)
         return response
 
     async def post(self, path: str, **kwargs: Any) -> httpx.Response:  # noqa: ANN401
-        response = await self._http.post(path, **kwargs)
+        response = await self._request("POST", path, **kwargs)
         self._raise_for_status(response)
         return response
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        **kwargs: Any,  # noqa: ANN401
+    ) -> httpx.Response:
+        try:
+            return await self._http.request(method, path, **kwargs)
+        except httpx.HTTPError as e:
+            raise ConfluenceAPIError(
+                f"Network error calling Confluence ({method} {path}): {e}"
+            ) from e
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -64,17 +81,11 @@ class ConfluenceClient:
 
     def _raise_for_status(self, response: httpx.Response) -> None:
         if response.status_code == 403:
-            raise ConfluencePermissionError(
-                f"Permission denied (HTTP 403): {response.url}"
-            )
+            raise ConfluencePermissionError(f"Permission denied (HTTP 403): {response.url}")
         if response.status_code == 404:
-            raise PageNotFoundError(
-                f"Page not found (HTTP 404): {response.url}"
-            )
+            raise PageNotFoundError(f"Page not found (HTTP 404): {response.url}")
         if response.status_code == 409:
-            raise VersionConflictError(
-                f"Version conflict (HTTP 409): {response.url}"
-            )
+            raise VersionConflictError(f"Version conflict (HTTP 409): {response.url}")
         if response.is_error:
             raise ConfluenceAPIError(
                 f"Confluence API error HTTP {response.status_code}: {response.text}"

@@ -9,7 +9,7 @@ applications:
     health-check-http-endpoint: /health
     health-check-invocation-timeout: 30
     env:
-      SERVER_TRANSPORT: streamable-http
+      SERVER_TRANSPORT: http
       SERVER_HOST: "0.0.0.0"
       JSON_LOGS: "true"
       # Confluence credentials - set via `cf set-env`, never committed here

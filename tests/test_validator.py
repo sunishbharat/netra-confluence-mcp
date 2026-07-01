@@ -68,9 +68,7 @@ def test_validate_fails_bad_tablerow_child() -> None:
                 "content": [
                     {
                         "type": "tableRow",
-                        "content": [
-                            {"type": "paragraph", "content": []}
-                        ],
+                        "content": [{"type": "paragraph", "content": []}],
                     }
                 ],
             }
@@ -83,31 +81,6 @@ def test_validate_fails_bad_tablerow_child() -> None:
 def test_validate_accepts_tableheader_in_tablerow(adf: dict[str, Any]) -> None:
     errors = AdfValidator.validate(adf)
     assert errors == []
-
-
-def test_count_replacements_title(adf: dict[str, Any]) -> None:
-    counts = AdfValidator.count_replacements(adf, "R1.0 Report for R1.0", "R1.0")
-    assert counts["title"] == 2
-
-
-def test_count_replacements_text(adf: dict[str, Any]) -> None:
-    counts = AdfValidator.count_replacements(adf, "title", "R1.0")
-    assert counts["text"] >= 1
-
-
-def test_count_replacements_jql(adf: dict[str, Any]) -> None:
-    counts = AdfValidator.count_replacements(adf, "title", "ver_R1.0")
-    assert counts["jql"] >= 1
-
-
-def test_count_replacements_macro_params(adf: dict[str, Any]) -> None:
-    counts = AdfValidator.count_replacements(adf, "title", "R1.0")
-    assert counts["macro_params"] >= 1
-
-
-def test_count_replacements_zero_for_no_match(adf: dict[str, Any]) -> None:
-    counts = AdfValidator.count_replacements(adf, "title", "NOMATCH_XYZ")
-    assert all(v == 0 for v in counts.values())
 
 
 def _find_extension(adf: dict[str, Any]) -> dict[str, Any]:

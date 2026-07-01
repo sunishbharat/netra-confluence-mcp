@@ -4,6 +4,7 @@ import re
 
 from confluence.adf.walker import AdfWalker
 from models.adf import JqlInfo, PageJqlInspection
+from models.types import AdfNode
 
 _LOCATION_LABELS: dict[str, str] = {
     "table": "table",
@@ -25,15 +26,36 @@ _LOCATION_LABELS: dict[str, str] = {
     "mediaSingle": "mediaSingle",
 }
 
-_JQL_KEYWORDS: frozenset[str] = frozenset({
-    "AND", "OR", "NOT", "IN", "IS", "WAS", "BY", "EMPTY", "NULL",
-    "ORDER", "ASC", "DESC", "ON", "BEFORE", "AFTER",
-})
+_JQL_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "AND",
+        "OR",
+        "NOT",
+        "IN",
+        "IS",
+        "WAS",
+        "BY",
+        "EMPTY",
+        "NULL",
+        "ORDER",
+        "ASC",
+        "DESC",
+        "ON",
+        "BEFORE",
+        "AFTER",
+    }
+)
+
+# A quoted span is always a JQL field name (e.g. "Planned Version"), never a
+# value token - stripped before tokenizing so it isn't split into bogus
+# multi-word candidates.
+_QUOTED_SPAN_RE = re.compile(r'"[^"]*"|\'[^\']*\'')
+_TOKEN_SPLIT_RE = re.compile(r"[\s=!<>~()\[\],]+")
 
 
 class AdfInspector:
     @staticmethod
-    def extract_jql_queries(adf: dict) -> list[JqlInfo]:  # type: ignore[type-arg]
+    def extract_jql_queries(adf: AdfNode) -> list[JqlInfo]:
         """
         Walk ADF tree and collect all Jira extension nodes.
 
@@ -45,8 +67,7 @@ class AdfInspector:
         nodes = AdfWalker.collect_nodes(
             adf,
             lambda n: (
-                n.get("type") == "extension"
-                and n.get("attrs", {}).get("extensionKey") == "jira"
+                n.get("type") == "extension" and n.get("attrs", {}).get("extensionKey") == "jira"
             ),
         )
 
@@ -64,22 +85,14 @@ class AdfInspector:
                 continue
 
             macro_id_entry = macro_metadata.get("macroId", {})
-            macro_id = (
-                macro_id_entry.get("value", "")
-                if isinstance(macro_id_entry, dict)
-                else ""
-            )
+            macro_id = macro_id_entry.get("value", "") if isinstance(macro_id_entry, dict) else ""
 
             columns_entry = macro_params.get("columns", {})
             server_entry = macro_params.get("server", {})
             max_issues_entry = macro_params.get("maximumIssues", {})
 
-            columns_val = (
-                columns_entry.get("value", "") if isinstance(columns_entry, dict) else ""
-            )
-            server_val = (
-                server_entry.get("value", "") if isinstance(server_entry, dict) else ""
-            )
+            columns_val = columns_entry.get("value", "") if isinstance(columns_entry, dict) else ""
+            server_val = server_entry.get("value", "") if isinstance(server_entry, dict) else ""
             max_issues_val = (
                 max_issues_entry.get("value", "") if isinstance(max_issues_entry, dict) else ""
             )
@@ -98,7 +111,7 @@ class AdfInspector:
         return results
 
     @staticmethod
-    def build_inspection(page_id: str, title: str, adf: dict) -> PageJqlInspection:  # type: ignore[type-arg]
+    def build_inspection(page_id: str, title: str, adf: AdfNode) -> PageJqlInspection:
         """Build a complete PageJqlInspection from a page's ADF."""
         jql_queries = AdfInspector.extract_jql_queries(adf)
         return PageJqlInspection(
@@ -110,7 +123,7 @@ class AdfInspector:
         )
 
     @staticmethod
-    def _build_location_path(adf: dict, path: list[str]) -> str:  # type: ignore[type-arg]
+    def _build_location_path(adf: AdfNode, path: list[str]) -> str:
         parts: list[str] = []
         current: object = adf
 
@@ -140,7 +153,8 @@ class AdfInspector:
     def _extract_unique_strings(jql_queries: list[JqlInfo]) -> list[str]:
         tokens: set[str] = set()
         for entry in jql_queries:
-            for raw in re.split(r'[\s=!<>~()\[\],\"\']+', entry.jql):
+            unquoted = _QUOTED_SPAN_RE.sub(" ", entry.jql)
+            for raw in _TOKEN_SPLIT_RE.split(unquoted):
                 token = raw.strip()
                 if not token:
                     continue

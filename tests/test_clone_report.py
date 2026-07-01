@@ -182,9 +182,7 @@ async def test_uses_target_space_id_when_provided(monkeypatch: pytest.MonkeyPatc
 
 
 async def test_error_returns_error_status(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        module, "read_page", AsyncMock(side_effect=PageNotFoundError("not found"))
-    )
+    monkeypatch.setattr(module, "read_page", AsyncMock(side_effect=PageNotFoundError("not found")))
     result = await module.clone_release_report(
         source_page_id="999",
         old_release="R1.0",

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from models.types import AdfNode
+
 
 class AdfWalker:
     @staticmethod
     def walk(
-        node: dict | list,  # type: ignore[type-arg]
-        visitor: Callable[[dict, list[str]], None],  # type: ignore[type-arg]
+        node: AdfNode | list[AdfNode],
+        visitor: Callable[[AdfNode, list[str]], None],
         path: list[str] | None = None,
     ) -> None:
         """Call visitor(node, path) for every dict node in the tree."""
@@ -25,13 +27,13 @@ class AdfWalker:
 
     @staticmethod
     def collect_nodes(
-        adf: dict,  # type: ignore[type-arg]
-        predicate: Callable[[dict], bool],  # type: ignore[type-arg]
-    ) -> list[tuple[dict, list[str]]]:  # type: ignore[type-arg]
+        adf: AdfNode,
+        predicate: Callable[[AdfNode], bool],
+    ) -> list[tuple[AdfNode, list[str]]]:
         """Return all nodes matching predicate, with their path lists."""
-        results: list[tuple[dict, list[str]]] = []  # type: ignore[type-arg]
+        results: list[tuple[AdfNode, list[str]]] = []
 
-        def _visitor(node: dict, path: list[str]) -> None:  # type: ignore[type-arg]
+        def _visitor(node: AdfNode, path: list[str]) -> None:
             if predicate(node):
                 results.append((node, path[:]))
 

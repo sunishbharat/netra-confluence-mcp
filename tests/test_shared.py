@@ -7,10 +7,12 @@ import pytest
 import tenacity
 
 import confluence.tools.shared as module
-from exceptions import VersionConflictError
+from exceptions import AdfValidationError, VersionConflictError
+from models.adf import ChangeLogEntry
 from models.confluence import PageContent, PageMetadata
 
 _PAGE_ID = "123456"
+_CHANGE = ChangeLogEntry(location="jql:content/0", detail="'R1.0' -> 'R2.0'")
 
 
 def _make_page(version: int) -> PageContent:
@@ -60,11 +62,12 @@ async def test_safe_update_succeeds_first_try(
     monkeypatch.setattr(module, "update_page", write_mock)
 
     def transform(adf: dict[str, Any], title: str) -> tuple[dict[str, Any], str, list[Any]]:
-        return adf, title, []
+        return adf, title, [_CHANGE]
 
     meta, log = await module.safe_update(fake_client, _PAGE_ID, transform, "test message")
+    assert meta is not None
     assert meta.version == 6
-    assert log == []
+    assert log == [_CHANGE]
     assert read_mock.call_count == 1
     assert write_mock.call_count == 1
 
@@ -87,11 +90,12 @@ async def test_safe_update_retries_on_409_then_succeeds(
     monkeypatch.setattr(module, "update_page", write_mock)
 
     def transform(adf: dict[str, Any], title: str) -> tuple[dict[str, Any], str, list[Any]]:
-        return adf, title, []
+        return adf, title, [_CHANGE]
 
     meta, log = await module.safe_update(fake_client, _PAGE_ID, transform, "test message")
+    assert meta is not None
     assert meta.version == 8
-    assert log == []
+    assert log == [_CHANGE]
     assert read_mock.call_count == 3, "safe_update must re-read on every retry"
     assert write_mock.call_count == 3, "safe_update must retry writes on 409"
 
@@ -108,7 +112,7 @@ async def test_safe_update_raises_after_three_conflicts(
     monkeypatch.setattr(module, "update_page", write_mock)
 
     def transform(adf: dict[str, Any], title: str) -> tuple[dict[str, Any], str, list[Any]]:
-        return adf, title, []
+        return adf, title, [_CHANGE]
 
     with pytest.raises(VersionConflictError):
         await module.safe_update(fake_client, _PAGE_ID, transform, "test message")
@@ -135,8 +139,50 @@ async def test_safe_update_returns_transform_log(
         return adf, title, [entry]
 
     meta, log = await module.safe_update(fake_client, _PAGE_ID, transform, "test message")
+    assert meta is not None
     assert meta.version == 6
     assert log == [entry]
+
+
+async def test_safe_update_skips_write_when_no_changes(
+    monkeypatch: pytest.MonkeyPatch,
+    patch_wait_none: None,  # noqa: ARG001
+    fake_client: MagicMock,
+) -> None:
+    """An empty change_log from transform_fn skips update_page entirely."""
+    read_mock = AsyncMock(return_value=_make_page(5))
+    write_mock = AsyncMock(return_value=_make_meta(6))
+    monkeypatch.setattr(module, "read_page", read_mock)
+    monkeypatch.setattr(module, "update_page", write_mock)
+
+    def transform(adf: dict[str, Any], title: str) -> tuple[dict[str, Any], str, list[Any]]:
+        return adf, title, []
+
+    meta, log = await module.safe_update(fake_client, _PAGE_ID, transform, "test message")
+    assert meta is None
+    assert log == []
+    assert write_mock.call_count == 0, "no write should happen when nothing changed"
+
+
+async def test_safe_update_validates_the_adf_it_is_about_to_write(
+    monkeypatch: pytest.MonkeyPatch,
+    patch_wait_none: None,  # noqa: ARG001
+    fake_client: MagicMock,
+) -> None:
+    """The ADF actually produced by transform_fn is validated - not a throwaway preview."""
+    read_mock = AsyncMock(return_value=_make_page(5))
+    write_mock = AsyncMock(return_value=_make_meta(6))
+    monkeypatch.setattr(module, "read_page", read_mock)
+    monkeypatch.setattr(module, "update_page", write_mock)
+
+    def transform(adf: dict[str, Any], title: str) -> tuple[dict[str, Any], str, list[Any]]:
+        # Invalid: root type is not "doc".
+        return {"type": "paragraph", "content": []}, title, [_CHANGE]
+
+    with pytest.raises(AdfValidationError) as exc_info:
+        await module.safe_update(fake_client, _PAGE_ID, transform, "test message")
+    assert exc_info.value.errors
+    assert write_mock.call_count == 0, "an invalid ADF must never reach update_page"
 
 
 async def test_update_date_nodes_does_not_mutate_input() -> None:
