@@ -36,9 +36,7 @@ async def health_check(request: Request) -> Response:
 def _configure_logging(*, json_logs: bool, log_level: str) -> None:
     """structlog: console output for local dev, JSON lines for the CF log drain."""
     level = logging.getLevelNamesMapping().get(log_level.upper(), logging.INFO)
-    renderer = (
-        structlog.processors.JSONRenderer() if json_logs else structlog.dev.ConsoleRenderer()
-    )
+    renderer = structlog.processors.JSONRenderer() if json_logs else structlog.dev.ConsoleRenderer()
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -53,23 +51,24 @@ def _configure_logging(*, json_logs: bool, log_level: str) -> None:
 if __name__ == "__main__":
     settings = NetraSettings()  # type: ignore[call-arg]  # fields read from env
     _configure_logging(json_logs=settings.json_logs, log_level=settings.log_level)
-    # FastMCP 2.x takes host/port/stateless_http as run() kwargs rather than constructor
-    # or post-construction settings; run_stdio_async() doesn't accept them at all, so they
-    # are only passed for the http transport.
-    run_kwargs: dict[str, object] = {"transport": settings.server_transport}
-    if settings.server_transport == "http":
-        # Every tool call is an independent read-transform-write against Confluence - there
-        # is no per-session state to keep, so http transport always runs stateless (no
-        # session affinity required, safe to scale horizontally behind the CF router).
-        run_kwargs.update(
-            host=settings.server_host,
-            port=settings.server_port,
-            stateless_http=True,
-        )
     logger.info(
         "server_starting",
         transport=settings.server_transport,
         host=settings.server_host,
         port=settings.server_port,
     )
-    server.run(**run_kwargs)
+    # FastMCP 2.x takes host/port/stateless_http as run() kwargs rather than constructor
+    # or post-construction settings; run_stdio_async() doesn't accept them at all, so they
+    # are only passed for the http transport.
+    if settings.server_transport == "http":
+        # Every tool call is an independent read-transform-write against Confluence - there
+        # is no per-session state to keep, so http transport always runs stateless (no
+        # session affinity required, safe to scale horizontally behind the CF router).
+        server.run(
+            transport="http",
+            host=settings.server_host,
+            port=settings.server_port,
+            stateless_http=True,
+        )
+    else:
+        server.run(transport="stdio")

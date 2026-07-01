@@ -29,25 +29,19 @@ async def test_get_sets_accept_header(httpx_mock: HTTPXMock, client: ConfluenceC
     assert request.headers["accept"] == "application/json"
 
 
-async def test_403_raises_permission_error(
-    httpx_mock: HTTPXMock, client: ConfluenceClient
-) -> None:
+async def test_403_raises_permission_error(httpx_mock: HTTPXMock, client: ConfluenceClient) -> None:
     httpx_mock.add_response(url=f"{BASE}/wiki/test", status_code=403)
     with pytest.raises(ConfluencePermissionError):
         await client.get("/wiki/test")
 
 
-async def test_404_raises_page_not_found(
-    httpx_mock: HTTPXMock, client: ConfluenceClient
-) -> None:
+async def test_404_raises_page_not_found(httpx_mock: HTTPXMock, client: ConfluenceClient) -> None:
     httpx_mock.add_response(url=f"{BASE}/wiki/test", status_code=404)
     with pytest.raises(PageNotFoundError):
         await client.get("/wiki/test")
 
 
-async def test_409_raises_version_conflict(
-    httpx_mock: HTTPXMock, client: ConfluenceClient
-) -> None:
+async def test_409_raises_version_conflict(httpx_mock: HTTPXMock, client: ConfluenceClient) -> None:
     httpx_mock.add_response(url=f"{BASE}/wiki/test", status_code=409)
     with pytest.raises(VersionConflictError):
         await client.get("/wiki/test")

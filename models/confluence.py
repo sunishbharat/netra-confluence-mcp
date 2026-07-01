@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from models.types import AdfNode
+
 
 class PageMetadata(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -14,7 +16,7 @@ class PageMetadata(BaseModel):
 
 
 class PageContent(PageMetadata):
-    adf: dict = Field(..., description="Full ADF document node")  # type: ignore[type-arg]
+    adf: AdfNode = Field(..., description="Full ADF document node")
 
 
 class UpdatePageRequest(BaseModel):
@@ -22,7 +24,7 @@ class UpdatePageRequest(BaseModel):
 
     page_id: str = Field(..., description="Target page ID")
     title: str = Field(..., description="New page title")
-    adf_body: dict = Field(..., description="ADF document node")  # type: ignore[type-arg]
+    adf_body: AdfNode = Field(..., description="ADF document node")
     version_number: int = Field(..., description="Must be current version + 1")
     version_message: str = Field(
         default="Automated update via Netra MCP",
@@ -36,6 +38,6 @@ class CreatePageRequest(BaseModel):
 
     space_id: str = Field(..., description="Target space ID")
     title: str = Field(..., description="Page title")
-    adf_body: dict = Field(..., description="ADF document node")  # type: ignore[type-arg]
+    adf_body: AdfNode = Field(..., description="ADF document node")
     parent_id: str | None = Field(default=None, description="Parent page ID")
     status: str = Field(default="current", description="'current' or 'draft'")

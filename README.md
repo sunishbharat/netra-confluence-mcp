@@ -88,6 +88,44 @@ You should see the server start without errors. Press Ctrl+C to stop it - your A
 
 3. Restart Claude Desktop. The Confluence tools will appear in the tool list.
 
+### Claude Desktop over HTTP (mcp-remote bridge)
+
+When the server runs in HTTP mode (Docker container, remote host, or `SERVER_TRANSPORT=http uv run python server.py`) instead of as a stdio child process, use [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) as a stdio-to-HTTP bridge. Claude Desktop's JSON config only spawns stdio children, so the bridge translates between Claude Desktop and the running HTTP endpoint.
+
+Install `mcp-remote` once:
+
+```bash
+npm install -g mcp-remote
+```
+
+Add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "netra-confluence-writer": {
+      "command": "mcp-remote",
+      "args": ["http://127.0.0.1:8765/mcp"]
+    }
+  }
+}
+```
+
+Prefer no global install? Use `npx` instead:
+
+```json
+{
+  "mcpServers": {
+    "netra-confluence-writer": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:8765/mcp"]
+    }
+  }
+}
+```
+
+The Confluence tools appear in the tool list once the bridge connects to the running server. The server must already be listening at the URL in `args` (see [Production transport (http)](#production-transport-http)).
+
 ### VS Code with GitHub Copilot
 
 1. Open your VS Code user settings (`Ctrl+Shift+P` -> "Open User Settings JSON")
@@ -138,11 +176,13 @@ To change the bind address or port, set `SERVER_HOST` / `SERVER_PORT` before sta
 curl http://127.0.0.1:8765/health   # {"status":"ok"}
 ```
 
-Connect with the MCP Inspector (`npx @modelcontextprotocol/inspector`, transport "Streamable HTTP", URL `http://127.0.0.1:8765/mcp`) or register it with Claude Code:
+Connect with the MCP Inspector (`npx @modelcontextprotocol/inspector`, transport "Streamable HTTP", URL `http://127.0.0.1:8765/mcp`), register it with Claude Code:
 
 ```bash
 claude mcp add --transport http netra-confluence http://127.0.0.1:8765/mcp
 ```
+
+or use `mcp-remote` as a stdio-to-HTTP bridge from Claude Desktop (see [Claude Desktop over HTTP](#claude-desktop-over-http-mcp-remote-bridge)).
 
 **No auth yet.** There is no API-key gate on the HTTP endpoint (see Phase 4 in `docs/netra-mcp-confluence-write-phased-design.md`). Keep the default loopback bind (`127.0.0.1`) unless you are on a trusted network or sitting behind an auth-terminating proxy.
 

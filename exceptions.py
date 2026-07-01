@@ -12,6 +12,10 @@ class VersionConflictError(NetraConfluenceError):
 class AdfValidationError(NetraConfluenceError):
     """ADF structure is invalid - write blocked."""
 
+    def __init__(self, errors: list[str]) -> None:
+        self.errors = errors
+        super().__init__("; ".join(errors))
+
 
 class ConfluencePermissionError(NetraConfluenceError):
     """Caller lacks the required Confluence permission (HTTP 403)."""

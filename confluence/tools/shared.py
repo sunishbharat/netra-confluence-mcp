@@ -8,11 +8,13 @@ from typing import Any
 import structlog
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
+from confluence.adf.differ import AdfDiffer
+from confluence.adf.validator import AdfValidator
 from confluence.adf.walker import AdfWalker
 from confluence.api import read_page, update_page
 from confluence.client import ConfluenceClient
-from exceptions import VersionConflictError
-from models.adf import ChangeLogEntry
+from exceptions import AdfValidationError, VersionConflictError
+from models.adf import ChangeLogEntry, DryRunResult
 from models.config import NetraSettings
 from models.confluence import PageMetadata, UpdatePageRequest
 
@@ -41,14 +43,30 @@ async def safe_update(
     page_id: str,
     transform_fn: TransformFn,
     version_message: str,
-) -> tuple[PageMetadata, list[ChangeLogEntry]]:
-    """Read-transform-write with automatic retry on 409 version conflicts.
+) -> tuple[PageMetadata | None, list[ChangeLogEntry]]:
+    """Read-transform-validate-write with automatic retry on 409 version conflicts.
 
     transform_fn returns (new_adf, new_title, change_log). On a 409, the
-    exception propagates so tenacity retries with a fresh read.
+    exception propagates so tenacity retries with a fresh read - and the ADF
+    produced by that fresh read is validated again here on every attempt, not
+    just once against a throwaway preview. This is the data that is actually
+    about to be written, which matters most on a retry: a 409 means someone
+    else just edited the page, so the freshly re-read content is exactly the
+    content least likely to match what a caller previewed earlier.
+
+    Raises AdfValidationError (never writes) if validation fails. Returns
+    (None, []) without writing if transform_fn produces no changes.
     """
     page = await read_page(client, page_id)
     new_adf, new_title, change_log = transform_fn(page.adf, page.title)
+
+    if not change_log:
+        return None, []
+
+    errors = AdfValidator.validate(new_adf)
+    if errors:
+        raise AdfValidationError(errors)
+
     meta = await update_page(
         client,
         UpdatePageRequest(
@@ -60,6 +78,44 @@ async def safe_update(
         ),
     )
     return meta, change_log
+
+
+def build_no_changes_response(page_id: str, title: str | None = None) -> dict[str, Any]:
+    response: dict[str, Any] = {"status": "NO_CHANGES", "page_id": page_id}
+    if title is not None:
+        response["title"] = title
+    return response
+
+
+def build_dry_run_response(
+    current_title: str,
+    new_title: str,
+    current_version: int,
+    change_log: list[ChangeLogEntry],
+) -> dict[str, Any]:
+    result = DryRunResult(
+        current_title=current_title,
+        new_title=new_title,
+        current_version=current_version,
+        total_changes=len(change_log),
+        change_summary=AdfDiffer.summarize_changes(change_log),
+        change_log=change_log,
+    )
+    return result.model_dump()
+
+
+def build_updated_response(
+    client: ConfluenceClient, meta: PageMetadata, applied_log: list[ChangeLogEntry]
+) -> dict[str, Any]:
+    return {
+        "status": "UPDATED",
+        "page_id": meta.id,
+        "title": meta.title,
+        "version": meta.version,
+        "url": f"{client.site_url}/wiki/spaces/{meta.space_id}/pages/{meta.id}",
+        "total_changes": len(applied_log),
+        "change_summary": AdfDiffer.summarize_changes(applied_log),
+    }
 
 
 def _iso_date_to_ms(date_str: str) -> str:

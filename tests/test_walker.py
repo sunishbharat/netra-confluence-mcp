@@ -80,6 +80,7 @@ def test_walk_traverses_list_elements() -> None:
 
 def test_walk_does_not_modify_adf() -> None:
     import copy
+
     adf = _simple_adf()
     original = copy.deepcopy(adf)
     AdfWalker.walk(adf, lambda n, p: None)
