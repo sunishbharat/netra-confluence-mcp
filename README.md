@@ -7,6 +7,7 @@ This tool lets your AI assistant (Claude, GitHub Copilot, or any MCP-compatible 
 - Replace version tokens or JQL values across an entire page in one shot
 - Preview every change before anything is written (dry-run is on by default)
 - Clone a release report page to a new version with all macros updated
+- Export any Confluence page to a PDF (rendered server-side, no page write involved)
 
 ---
 
@@ -175,6 +176,8 @@ To change the bind address or port, set `SERVER_HOST` / `SERVER_PORT` before sta
 ```bash
 curl http://127.0.0.1:8765/health   # {"status":"ok"}
 ```
+
+`export_page_pdf`'s `delivery="link"` mode also exposes `GET /exports/{token}` - a time-limited download route for PDFs it has rendered (see [Recipe: export a page to PDF](#recipe-export-a-page-to-pdf)). It only serves tokens minted by that tool; there is no directory listing or arbitrary-path access.
 
 Connect with the MCP Inspector (`npx @modelcontextprotocol/inspector`, transport "Streamable HTTP", URL `http://127.0.0.1:8765/mcp`), register it with Claude Code:
 
@@ -412,6 +415,90 @@ The AI calls `clone_release_report`. The clone gets:
 
 ---
 
+## Recipe: export a page to PDF
+
+`export_page_pdf` renders any Confluence page to a PDF from Confluence's own `export_view` HTML - Jira macros come out as static tables, no headless browser involved. It is **fully read-only**: no page, attachment, or metadata write ever occurs, so there is no dry-run/apply split like the write tools above - the AI can just do it.
+
+### Step 1 - Ask for the export
+
+> "Export Confluence page 2811939182 to a PDF."
+
+You can give it a bare page ID (like above) or paste the full URL from your browser's address bar - any of these work:
+
+```
+2811939182
+https://your-org.atlassian.net/wiki/spaces/ENG/pages/2811939182/Release+Report
+https://your-org.atlassian.net/pages/viewpage.action?pageId=2811939182
+https://your-org.atlassian.net/wiki/x/AbCdE                        (tiny link)
+https://your-org.atlassian.net/wiki/display/ENG/Release+Report     (display URL)
+```
+
+The AI calls `export_page_pdf("2811939182")`. By default you get back a time-limited download link:
+
+```json
+{
+  "status": "OK",
+  "page_id": "2811939182",
+  "page_title": "R1.0 Release Report",
+  "page_version": 15,
+  "pdf_sha256": "a1b2c3...",
+  "pdf_bytes": 812345,
+  "delivery": "link",
+  "download_url": "https://netra-confluence.<your-domain>/exports/AbC123...",
+  "expires_at": "2026-07-02T18:30:00Z",
+  "asset_report": {"fetched": ["..."], "skipped_external": [], "failed": [], "downscaled": []},
+  "message": "PDF ready: https://.../exports/AbC123... (expires 2026-07-02T18:30:00Z). Open the link in a browser to download it."
+}
+```
+
+### Step 2 - Open the download link
+
+Copy `download_url` (the AI's chat response will normally show it to you directly - the `message` field is written so the AI repeats it in prose) and open it in any browser, or `curl -O`/`wget` it. That triggers a file download (`Content-Disposition: attachment`), not an inline PDF preview in the tab.
+
+The link only works until `expires_at` (30 minutes by default). If you wait too long, opening it returns "link expired - re-run the export" - just ask the AI to export the page again.
+
+`asset_report` tells you about any images that didn't make it into the PDF unchanged: images hosted elsewhere are swapped for a placeholder and listed under `skipped_external`; a single broken image (403/404/timeout) degrades to a placeholder under `failed` instead of failing your whole export.
+
+### Getting the PDF bytes directly instead of a link
+
+If you'd rather have the AI hand you the file content directly (useful when you're not going to open a browser, e.g. scripting against the MCP client), ask for inline delivery:
+
+> "Export page 2811939182 to a PDF, inline."
+
+> Tool call: `export_page_pdf("2811939182", delivery="inline")`
+
+This returns `pdf_base64` instead of `download_url`, but only when the PDF is small enough (under `EXPORT_INLINE_MAX_BYTES`, 4 MB by default). Bigger PDFs come back with `status: "ERROR"` and `error_code: "TOO_LARGE_FOR_INLINE"` - fall back to the default `delivery="link"` for those. Whether your MCP client can actually save a base64 blob to disk depends on the client, which is exactly why `"link"` is the default.
+
+### Other options
+
+- `page_size="LETTER"` for US Letter paper instead of the default A4:
+  > "Export page 2811939182 to a PDF, US Letter size."
+- `filename="quarterly-summary"` to control the downloaded file's name (defaults to the slugified page title plus today's date, e.g. `r1-0-release-report-2026-07-02.pdf`):
+  > "Export page 2811939182 to a PDF and name it quarterly-summary."
+
+### If it fails
+
+`status` is `"ERROR"` and `error_code` explains why:
+
+| `error_code` | What happened | What to do |
+|---|---|---|
+| `INVALID_URL` | The link/ID didn't match any accepted shape | Paste the page URL exactly as it appears in your browser, or use the bare numeric page ID |
+| `WRONG_SITE` | The link points at a different site than this server is configured for | Only links on your own `CONFLUENCE_SITE_URL` are accepted, by design |
+| `PAGE_NOT_FOUND` | The page doesn't exist, or was deleted/archived | Double-check the page ID |
+| `PERMISSION_DENIED` | You (or the shared service account) can't view the page | You need at least View permission in Confluence |
+| `PAGE_TOO_LARGE` | The page's rendered HTML exceeds the size guard | Very large pages aren't supported yet; try exporting a smaller page or section |
+| `EXPORT_TIMEOUT` | Fetching, localizing images, and rendering together took too long | Usually transient - try again; persistent timeouts suggest a very large/complex page |
+| `TOO_LARGE_FOR_INLINE` | You asked for `delivery="inline"` but the PDF is too big | Use the default `delivery="link"` instead |
+| `STORAGE_FAILED` | The server couldn't hold the rendered PDF for link delivery | Try `delivery="inline"` for smaller PDFs, or re-run the export |
+| `RATE_LIMITED` | Confluence itself rate-limited the request | Wait a bit and try again |
+| `API_ERROR` | Any other Confluence/network error | Check the `message` field for details |
+
+### How the download link works (good to know)
+
+**Download links only work in `http` transport, single instance.** The link points at this server's own `/exports/{token}` route, which reads from an in-process cache (`EXPORT_STORE=memory`, the only backend shipped so far). That cache lives in one process's memory, so it only works with `instances: 1` in `manifest.yml.template` - the server logs a startup warning if it detects `CF_INSTANCE_INDEX` indicating more than one instance is running. Links expire after `EXPORT_LINK_TTL_SECONDS` (default 30 minutes, echoed in `expires_at`); an expired or unknown token gets `410 Gone` from the route, not a stack trace. If you only run the server as a local stdio process for yourself, `delivery="inline"` avoids the link mechanism entirely for small PDFs.
+
+---
+
 ## How it works
 
 ```mermaid
@@ -427,10 +514,16 @@ flowchart TD
             T2[update_release_version]
             T3[clone_release_report]
             T4[create_page_from_adf]
+            T5[export_page_pdf]
         end
         subgraph Engine["ADF Engine"]
             R[Find and replace]
             V[Validate before write]
+        end
+        subgraph ExportEngine["Export Engine (read-only)"]
+            RES[Resolve URL to page id]
+            AST[Localize assets - offline after this step]
+            PDF[WeasyPrint render]
         end
     end
 
@@ -438,9 +531,11 @@ flowchart TD
         API[REST API]
     end
 
-    A --> T0 & T1 & T2 & T3 & T4
+    A --> T0 & T1 & T2 & T3 & T4 & T5
     T1 & T2 & T3 --> R --> V
     T0 & V --> API
+    T5 --> RES --> AST --> PDF
+    RES & AST --> API
 ```
 
 The server reads pages as ADF (Atlassian Document Format - the native JSON format Confluence uses internally). It finds JQL values at their exact JSON path, replaces them, validates the result, and writes back. No regex is used at any point.
@@ -456,6 +551,7 @@ The server reads pages as ADF (Atlassian Document Format - the native JSON forma
 | `update_release_version` | Like above, also updates date node timestamps | Yes, if `dry_run=False` |
 | `clone_release_report` | Clones a page, updates all version tokens and macro IDs | Yes, if `dry_run=False` |
 | `create_page_from_adf` | Creates a new page from an ADF body | Yes, if `dry_run=False` |
+| `export_page_pdf` | Renders any page to a PDF (download link or inline base64) | Never |
 
 All write tools default to `dry_run=True`. You must explicitly say "apply it" or pass `dry_run=False` to make any change.
 
@@ -471,6 +567,8 @@ All write tools default to `dry_run=True`. You must explicitly say "apply it" or
 | `VALIDATION_FAILED` | ADF structure check failed; write blocked; `errors` list present |
 | `VERSION_CONFLICT` | Someone else edited the page at the same time; retry |
 | `ERROR` | API or network error; `error` field has details |
+
+`export_page_pdf` uses its own response contract instead (`status: "OK" | "ERROR"` plus a typed `error_code` on failure) - see [Recipe: export a page to PDF](#recipe-export-a-page-to-pdf).
 
 ---
 
@@ -491,11 +589,22 @@ Make sure the `cwd` path in your client config is the absolute path to the folde
 **"Version conflict" after applying**
 Someone else saved the page between your inspect and your apply. Just repeat the operation - the server re-reads the latest version before writing.
 
+**PDF download link says "link expired - re-run the export"**
+Download links expire after `EXPORT_LINK_TTL_SECONDS` (30 minutes by default) and aren't renewable - just ask the AI to run `export_page_pdf` again for a fresh link.
+
+**PDF download link 404s even though `expires_at` hasn't passed yet**
+The link only works against the single server instance that rendered it (`EXPORT_STORE=memory`). If the deployment is scaled to more than one instance, the download can land on a different one. Check the server logs for an `export_store_memory_scale_out_risk` warning at startup; the fix today is to keep `instances: 1` in `manifest.yml.template`.
+
+**Images are missing or replaced with a text placeholder in the exported PDF**
+That's the export's fidelity-gap disclosure working as intended, not a bug - check the `asset_report` field in the tool response. Images hosted outside your Confluence site are never fetched (`skipped_external`); a broken or restricted image (403/404/timeout) also degrades to a placeholder (`failed`) instead of failing the whole export.
+
 ---
 
 ## Docker and cloud deployment
 
 The server ships as a self-contained, stateless Docker image - no Valkey, no external datastore. Full runbook (CF first deploy, blue-green updates, env var reference): `docs/docker_cf_deployment.md`.
+
+`manifest.yml.template` allocates 512 MB (raised from 256 MB) - WeasyPrint's PDF rendering for `export_page_pdf` spikes well beyond the httpx-only baseline on large pages. The image also needs Pango/Cairo/GDK-Pixbuf/HarfBuzz and Noto fonts (CJK + emoji, so exported text doesn't render as tofu boxes); these are already baked into `docker/Dockerfile`.
 
 ### Local dev with docker-compose
 

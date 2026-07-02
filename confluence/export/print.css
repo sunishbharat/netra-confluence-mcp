@@ -1,0 +1,67 @@
+/* Packaged print stylesheet for export_page_pdf (docs/netra-mcp-export-pdf-design.md
+   section 3.4). @page size is intentionally NOT set here - confluence/export/pdf.py
+   appends a small dynamic stylesheet with the caller's chosen page_size (A4/LETTER)
+   after this one, so the size override always wins. */
+
+@page {
+    margin: 2.5cm 1.5cm 2cm 1.5cm;
+
+    @top-center {
+        content: string(netra-title);
+        font-size: 9pt;
+        color: #555555;
+    }
+
+    @bottom-center {
+        content: "exported " string(netra-timestamp) " - page " counter(page) " of " counter(pages);
+        font-size: 8pt;
+        color: #777777;
+    }
+}
+
+/* Invisible marker paragraphs injected by pdf.py just inside <body> so
+   string-set fires before any real page content is laid out. display:none
+   would suppress box generation entirely (and string-set with it), so these
+   stay boxed but visually collapsed instead. */
+.netra-export-marker {
+    string-set: netra-title content();
+    margin: 0;
+    padding: 0;
+    height: 0;
+    max-height: 0;
+    overflow: hidden;
+    font-size: 1px;
+    line-height: 0;
+    color: transparent;
+}
+
+.netra-export-marker.netra-export-timestamp {
+    string-set: netra-timestamp content();
+}
+
+table {
+    table-layout: fixed;
+    width: 100%;
+    border-collapse: collapse;
+}
+
+table, th, td {
+    border: 1px solid #dddddd;
+}
+
+th, td {
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+    padding: 4px 6px;
+}
+
+pre, code {
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+}
+
+img {
+    max-width: 100%;
+    height: auto;
+}

@@ -1,21 +1,33 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 import structlog
 from fastmcp import FastMCP
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, PlainTextResponse, Response
 
+from confluence.export.store import get_default_store
 from confluence.tools.clone_report import clone_release_report
 from confluence.tools.create_page import create_page_from_adf
+from confluence.tools.export_pdf import export_page_pdf
 from confluence.tools.inspect_jql import inspect_page_jql
 from confluence.tools.update_macros import update_page_macros
 from confluence.tools.update_release import update_release_version
 from models.config import NetraSettings
 
 logger = structlog.get_logger(__name__)
+
+# Any control character (including CR/LF, which would let a crafted filename
+# inject additional response headers) or a bare double quote (which would let
+# it break out of the quoted filename value) is replaced with "_".
+_UNSAFE_HEADER_CHARS_RE = re.compile(r'[\x00-\x1f\x7f"]')
+
+
+def _safe_content_disposition_filename(filename: str) -> str:
+    return _UNSAFE_HEADER_CHARS_RE.sub("_", filename)
 
 server = FastMCP(
     "netra-confluence-writer",
@@ -27,11 +39,40 @@ server.tool()(update_page_macros)
 server.tool()(update_release_version)
 server.tool()(clone_release_report)
 server.tool()(create_page_from_adf)
+server.tool()(export_page_pdf)
 
 
 @server.custom_route("/health", methods=["GET"])
 async def health_check(request: Request) -> Response:
     return JSONResponse({"status": "ok"})
+
+
+@server.custom_route("/exports/{token}", methods=["GET"])
+async def download_export(request: Request) -> Response:
+    """Serve a PDF minted by export_page_pdf(delivery="link"). Only tokens
+    put() actually stored are servable - there is no other path this route
+    can be coaxed into reading. Expired or unknown tokens get 410 Gone, not a
+    stack trace or a 404 that implies the token might exist somewhere else.
+    """
+    token = request.path_params["token"]
+    settings = NetraSettings()  # type: ignore[call-arg]  # fields read from env
+    store = get_default_store(max_bytes=settings.export_store_max_bytes)
+    result = await store.get(token)
+    if result is None:
+        return PlainTextResponse("link expired - re-run the export", status_code=410)
+
+    pdf_bytes, filename = result
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{_safe_content_disposition_filename(filename)}"'
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 # Phase 4.3: matches event-dict keys carrying credential material, e.g. "token",
@@ -69,9 +110,35 @@ def _configure_logging(*, json_logs: bool, log_level: str) -> None:
     )
 
 
+def _warn_if_unsafe_memory_export_store(settings: NetraSettings) -> None:
+    """EXPORT_STORE=memory holds PDFs only in this one process's RAM - a
+    download 404s/410s if it lands on a different instance than the one that
+    rendered it (addendum section 4). Only safe at instances: 1, or with
+    session affinity, which section 15 deliberately avoids for the rest of
+    this server. CF_INSTANCE_INDEX != "0" is proof-positive that more than
+    one instance is running; index "0" alone doesn't prove the opposite, but
+    it is the only scale-out signal CF gives the app by default.
+    """
+    if settings.export_store != "memory":
+        return
+    instance_index = os.environ.get("CF_INSTANCE_INDEX")
+    if instance_index is not None and instance_index != "0":
+        logger.warning(
+            "export_store_memory_scale_out_risk",
+            cf_instance_index=instance_index,
+            message=(
+                "EXPORT_STORE=memory but CF_INSTANCE_INDEX indicates more than one "
+                "instance is running - export_page_pdf download links will 404/410 "
+                "when they land on a different instance than the one that rendered "
+                "the PDF. Keep instances: 1 until EXPORT_STORE=s3 is available."
+            ),
+        )
+
+
 if __name__ == "__main__":
     settings = NetraSettings()  # type: ignore[call-arg]  # fields read from env
     _configure_logging(json_logs=settings.json_logs, log_level=settings.log_level)
+    _warn_if_unsafe_memory_export_store(settings)
     logger.info(
         "server_starting",
         transport=settings.server_transport,

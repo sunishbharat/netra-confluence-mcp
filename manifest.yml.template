@@ -2,8 +2,10 @@ applications:
   - name: netra-confluence-mcp
     docker:
       image: DOCKER_IMAGE_TAG
-    memory: 256M
-    disk_quota: 256M
+    # 512M (raised from 256M): WeasyPrint PDF rendering (export_page_pdf) spikes
+    # well beyond the httpx-only baseline on large pages.
+    memory: 512M
+    disk_quota: 512M
     instances: 1
     health-check-type: http
     health-check-http-endpoint: /health

@@ -61,9 +61,7 @@ async def test_validation_error_returns_validation_failed() -> None:
 
 async def test_validation_runs_before_write(patch_client: MagicMock) -> None:
     """Invalid ADF must short-circuit even when dry_run=False - never reach get_client."""
-    result = await module.create_page_from_adf(
-        "SPACE001", "New Page", _INVALID_ADF, dry_run=False
-    )
+    result = await module.create_page_from_adf("SPACE001", "New Page", _INVALID_ADF, dry_run=False)
     assert result["status"] == "VALIDATION_FAILED"
     patch_client.get.assert_not_called()
 

@@ -10,6 +10,7 @@ from exceptions import (
     ConfluencePermissionError,
     MissingCredentialsError,
     PageNotFoundError,
+    RateLimitedError,
     VersionConflictError,
 )
 from models.config import NetraSettings
@@ -94,7 +95,24 @@ class ConfluenceClient:
             raise PageNotFoundError(f"Page not found (HTTP 404): {response.url}")
         if response.status_code == 409:
             raise VersionConflictError(f"Version conflict (HTTP 409): {response.url}")
+        if response.status_code == 429:
+            retry_after = self._parse_retry_after(response.headers.get("Retry-After"))
+            raise RateLimitedError(
+                f"Rate limited (HTTP 429): {response.url}", retry_after=retry_after
+            )
         if response.is_error:
             raise ConfluenceAPIError(
                 f"Confluence API error HTTP {response.status_code}: {response.text}"
             )
+
+    @staticmethod
+    def _parse_retry_after(value: str | None) -> float | None:
+        # Retry-After is either delay-seconds (the common case for 429s) or an
+        # HTTP-date; only the numeric form is worth parsing here - callers fall
+        # back to their own default backoff when this returns None.
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            return None

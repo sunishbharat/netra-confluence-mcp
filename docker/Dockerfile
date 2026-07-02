@@ -15,12 +15,26 @@ ENV UV_LINK_MODE=copy \
 
 COPY pyproject.toml uv.lock ./
 
-RUN uv sync --frozen --no-install-project --no-dev
+RUN uv sync --frozen --no-install-project --no-dev --no-build
 
 # -- Stage 2: final runtime image ---------------------------------------------
 FROM python:3.12-slim AS final
 
 WORKDIR /app
+
+# WeasyPrint (export_page_pdf) needs these at runtime for HTML->PDF rendering;
+# the Noto families cover CJK and emoji glyphs so export text doesn't render
+# as tofu boxes. selectolax needs no system libs (self-contained wheel).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
+        libgdk-pixbuf-2.0-0 \
+        libcairo2 \
+        libharfbuzz0b \
+        fonts-noto \
+        fonts-noto-cjk \
+        fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
 
 # Python virtualenv from builder
 COPY --from=builder /app/.venv /app/.venv
