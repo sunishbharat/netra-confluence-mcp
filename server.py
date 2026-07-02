@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 import structlog
 from fastmcp import FastMCP
@@ -33,6 +34,25 @@ async def health_check(request: Request) -> Response:
     return JSONResponse({"status": "ok"})
 
 
+# Phase 4.3: matches event-dict keys carrying credential material, e.g. "token",
+# "api_key", "confluence_api_token", "authorization" - not an exhaustive header list,
+# a broad key-name match so a future log call naming a secret is redacted by default.
+_REDACTED_KEY_PATTERN = re.compile(r"token|password|api_key|authorization", re.IGNORECASE)
+_REDACTED_VALUE = "[REDACTED]"
+
+
+def _redact_sensitive_fields(
+    logger: structlog.typing.WrappedLogger,
+    method_name: str,
+    event_dict: structlog.typing.EventDict,
+) -> structlog.typing.EventDict:
+    """structlog processor: mask values of keys matching token/password/api_key/authorization."""
+    for key in event_dict:
+        if _REDACTED_KEY_PATTERN.search(key):
+            event_dict[key] = _REDACTED_VALUE
+    return event_dict
+
+
 def _configure_logging(*, json_logs: bool, log_level: str) -> None:
     """structlog: console output for local dev, JSON lines for the CF log drain."""
     level = logging.getLevelNamesMapping().get(log_level.upper(), logging.INFO)
@@ -42,6 +62,7 @@ def _configure_logging(*, json_logs: bool, log_level: str) -> None:
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
+            _redact_sensitive_fields,
             renderer,
         ],
         wrapper_class=structlog.make_filtering_bound_logger(level),

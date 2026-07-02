@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import structlog
+from fastmcp.server.dependencies import get_http_headers
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from confluence.adf.differ import AdfDiffer
@@ -13,23 +14,51 @@ from confluence.adf.validator import AdfValidator
 from confluence.adf.walker import AdfWalker
 from confluence.api import read_page, update_page
 from confluence.client import ConfluenceClient
-from exceptions import AdfValidationError, VersionConflictError
+from exceptions import AdfValidationError, MissingCredentialsError, VersionConflictError
 from models.adf import ChangeLogEntry, DryRunResult
 from models.config import NetraSettings
 from models.confluence import PageMetadata, UpdatePageRequest
 
 log = structlog.get_logger()
 
-_client: ConfluenceClient | None = None
-
 TransformFn = Callable[[dict[str, Any], str], tuple[dict[str, Any], str, list[ChangeLogEntry]]]
+
+_HEADER_EMAIL = "x-confluence-user-email"
+_HEADER_TOKEN = "x-confluence-api-token"
 
 
 def get_client() -> ConfluenceClient:
-    global _client
-    if _client is None:
-        _client = ConfluenceClient(NetraSettings())  # type: ignore[call-arg]  # fields read from env
-    return _client
+    """Build a ConfluenceClient scoped to the identity of the calling human.
+
+    stdio transport: one server process per user already (Tier 0), so
+    credentials come from that user's own environment/.env, unchanged from
+    before Tier 1.
+
+    http transport: the server owns no Confluence identity. Every call must
+    carry X-Confluence-User-Email / X-Confluence-Api-Token headers; a fresh
+    client is built from them so Confluence attribution and permissions match
+    the human who triggered the call, never a shared service account. There
+    is no fallback to env vars here - a missing header is a hard error.
+
+    Callers must use this as `async with get_client() as client:` so the
+    per-request client (and its underlying connection) is always closed.
+    """
+    settings = NetraSettings()  # type: ignore[call-arg]  # fields read from env
+
+    if settings.server_transport != "http":
+        return ConfluenceClient(settings)
+
+    headers = get_http_headers()
+    email = headers.get(_HEADER_EMAIL, "").strip()
+    token = headers.get(_HEADER_TOKEN, "").strip()
+    if not email or not token:
+        raise MissingCredentialsError("missing per-user Confluence credentials")
+
+    per_user_settings = NetraSettings(  # type: ignore[call-arg]  # base_url/site_url read from env
+        confluence_api_token=token,
+        confluence_user_email=email,
+    )
+    return ConfluenceClient(per_user_settings)
 
 
 @retry(

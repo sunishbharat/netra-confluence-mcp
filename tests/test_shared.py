@@ -7,7 +7,7 @@ import pytest
 import tenacity
 
 import confluence.tools.shared as module
-from exceptions import AdfValidationError, VersionConflictError
+from exceptions import AdfValidationError, MissingCredentialsError, VersionConflictError
 from models.adf import ChangeLogEntry
 from models.confluence import PageContent, PageMetadata
 
@@ -206,3 +206,65 @@ async def test_update_date_nodes_does_not_mutate_input() -> None:
     assert new_adf is not adf
     assert new_adf["content"][0]["attrs"]["timestamp"] != "1778025600000"
     assert log, "expected a date change log entry"
+
+
+def _set_base_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Server-owned config that both stdio and http transports need regardless of identity."""
+    monkeypatch.setenv("CONFLUENCE_BASE_URL", "https://test.atlassian.net")
+    monkeypatch.setenv("CONFLUENCE_SITE_URL", "https://test.atlassian.net")
+
+
+async def test_get_client_stdio_uses_env_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """stdio transport (Tier 0): one process per user, so env credentials are the identity."""
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("SERVER_TRANSPORT", "stdio")
+    monkeypatch.setenv("CONFLUENCE_API_TOKEN", "env-token")
+    monkeypatch.setenv("CONFLUENCE_USER_EMAIL", "env-user@example.com")
+
+    async with module.get_client() as client:
+        assert client.site_url == "https://test.atlassian.net"
+
+
+async def test_get_client_http_without_headers_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """http transport (Tier 1) with no credential headers is a hard error, not a fallback."""
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("SERVER_TRANSPORT", "http")
+    monkeypatch.delenv("CONFLUENCE_API_TOKEN", raising=False)
+    monkeypatch.delenv("CONFLUENCE_USER_EMAIL", raising=False)
+    monkeypatch.setattr(module, "get_http_headers", lambda: {})
+
+    with pytest.raises(MissingCredentialsError):
+        module.get_client()
+
+
+async def test_get_client_http_uses_per_request_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """http transport builds a client from the caller's own X-Confluence-* headers."""
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("SERVER_TRANSPORT", "http")
+    monkeypatch.delenv("CONFLUENCE_API_TOKEN", raising=False)
+    monkeypatch.delenv("CONFLUENCE_USER_EMAIL", raising=False)
+    monkeypatch.setattr(
+        module,
+        "get_http_headers",
+        lambda: {
+            "x-confluence-user-email": "alice@example.com",
+            "x-confluence-api-token": "alice-token",
+        },
+    )
+
+    async with module.get_client() as client:
+        assert client.site_url == "https://test.atlassian.net"
+
+
+async def test_get_client_http_never_falls_back_to_env_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even if the server process has service-account env vars set, http must ignore them."""
+    _set_base_env(monkeypatch)
+    monkeypatch.setenv("SERVER_TRANSPORT", "http")
+    monkeypatch.setenv("CONFLUENCE_API_TOKEN", "service-account-token")
+    monkeypatch.setenv("CONFLUENCE_USER_EMAIL", "service-account@example.com")
+    monkeypatch.setattr(module, "get_http_headers", lambda: {})
+
+    with pytest.raises(MissingCredentialsError):
+        module.get_client()

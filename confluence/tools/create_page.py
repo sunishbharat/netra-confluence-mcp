@@ -56,25 +56,25 @@ async def create_page_from_adf(
                 "message": "Preview only. Call again with dry_run=False to create.",
             }
 
-        client = get_client()
-        space_id = await _resolve_space_id(client, space_key)
-        meta = await create_page(
-            client,
-            CreatePageRequest(
-                space_id=space_id,
-                title=title,
-                adf_body=adf_body,
-                parent_id=parent_page_id,
-                status=status,
-            ),
-        )
-        return {
-            "status": "CREATED",
-            "page_id": meta.id,
-            "title": meta.title,
-            "version": meta.version,
-            "url": f"{client.site_url}/wiki/spaces/{meta.space_id}/pages/{meta.id}",
-        }
+        async with get_client() as client:
+            space_id = await _resolve_space_id(client, space_key)
+            meta = await create_page(
+                client,
+                CreatePageRequest(
+                    space_id=space_id,
+                    title=title,
+                    adf_body=adf_body,
+                    parent_id=parent_page_id,
+                    status=status,
+                ),
+            )
+            return {
+                "status": "CREATED",
+                "page_id": meta.id,
+                "title": meta.title,
+                "version": meta.version,
+                "url": f"{client.site_url}/wiki/spaces/{meta.space_id}/pages/{meta.id}",
+            }
     except NetraConfluenceError as e:
         log.error("create_page_from_adf failed", space_key=space_key, title=title, error=str(e))
         return {"status": "ERROR", "error": str(e)}

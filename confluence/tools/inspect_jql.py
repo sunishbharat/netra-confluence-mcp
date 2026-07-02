@@ -22,10 +22,10 @@ async def inspect_page_jql(page_id: str) -> dict[str, Any]:
     what JQL exists on the page and identify what to replace.
     """
     try:
-        client = get_client()
-        page = await read_page(client, page_id)
-        inspection = AdfInspector.build_inspection(page.id, page.title, page.adf)
-        return {"status": "INSPECTION", **inspection.model_dump()}
+        async with get_client() as client:
+            page = await read_page(client, page_id)
+            inspection = AdfInspector.build_inspection(page.id, page.title, page.adf)
+            return {"status": "INSPECTION", **inspection.model_dump()}
     except NetraConfluenceError as e:
         log.error("inspect_page_jql failed", page_id=page_id, error=str(e))
         return {"status": "ERROR", "error": str(e)}

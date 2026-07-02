@@ -184,7 +184,45 @@ claude mcp add --transport http netra-confluence http://127.0.0.1:8765/mcp
 
 or use `mcp-remote` as a stdio-to-HTTP bridge from Claude Desktop (see [Claude Desktop over HTTP](#claude-desktop-over-http-mcp-remote-bridge)).
 
-**No auth yet.** There is no API-key gate on the HTTP endpoint (see Phase 4 in `docs/netra-mcp-confluence-write-phased-design.md`). Keep the default loopback bind (`127.0.0.1`) unless you are on a trusted network or sitting behind an auth-terminating proxy.
+**No endpoint auth yet.** There is no API-key gate on the `/mcp` endpoint itself (see Phase 4 in `docs/netra-mcp-confluence-write-phased-design.md`). Keep the default loopback bind (`127.0.0.1`) unless you are on a trusted network or sitting behind an auth-terminating proxy - see "Team access on http (multi-user credential passthrough)" below for why this matters even after per-user credentials are wired up.
+
+### Team access on http (multi-user credential passthrough)
+
+On http transport the server holds **no** Confluence identity of its own - `CONFLUENCE_API_TOKEN` / `CONFLUENCE_USER_EMAIL` must be left unset in the server's environment. Every tool call instead carries the caller's own identity as request headers:
+
+```
+X-Confluence-User-Email: alice@example.com
+X-Confluence-Api-Token:  <alice's own API token>
+```
+
+The server builds a fresh Confluence client from those headers per call. Two teammates hitting the same shared server therefore write as themselves - Confluence page history shows "Alice" and "Bob", not a shared service account - and each person is bound by their own Confluence permissions. A request with no headers, or a blank header, gets `{"status": "ERROR", "error": "missing per-user Confluence credentials"}` - there is no fallback to a shared identity.
+
+Each team member's Claude Desktop config carries their own headers via `mcp-remote --header`:
+
+```json
+{
+  "mcpServers": {
+    "netra-confluence-writer": {
+      "command": "npx",
+      "args": [
+        "-y", "mcp-remote", "https://netra-confluence.<your-domain>/mcp",
+        "--header", "X-Confluence-User-Email: alice@example.com",
+        "--header", "X-Confluence-Api-Token: ${CONFLUENCE_API_TOKEN}"
+      ],
+      "env": { "CONFLUENCE_API_TOKEN": "<alice's own token>" }
+    }
+  }
+}
+```
+
+(The `env` indirection keeps the raw token out of the JSON config body itself. Clients with native HTTP-header support can configure the two headers directly instead of going through `mcp-remote`.)
+
+**Requirements for running this in production, not just locally:**
+- **TLS end to end.** These headers carry a live API token; the route must be HTTPS-only. A plain-HTTP bind is only acceptable on `127.0.0.1`.
+- **The endpoint still needs its own gate.** Header passthrough authenticates the *Confluence* call, not the *MCP endpoint* - anyone who can reach `/mcp` and supply any valid Atlassian token can use the server as an open Confluence proxy. Keep the route internal-only, or put an API-key/mTLS gate in front of it at the router, until OAuth 2.0 (Tier 2, see `docs/netra-mcp-confluence-write-phased-design.md` section 16.4) lands.
+- **Don't log the headers.** `X-Confluence-Api-Token` must never end up in request logs. A structlog processor redacts any log field whose key matches `token`/`password`/`api_key`/`authorization` (case-insensitive) to `[REDACTED]` as a backstop, but no code should pass credential values to a log call in the first place.
+
+If you don't need a shared server at all, per-user **stdio** (each teammate runs their own local process with their own `.env` - see [Setup](#setup-one-time)) already gives native per-user attribution today with zero extra configuration.
 
 ---
 

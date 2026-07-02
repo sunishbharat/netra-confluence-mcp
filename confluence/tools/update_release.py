@@ -45,7 +45,6 @@ async def update_release_version(
         return {"status": "ERROR", "error": str(e)}
 
     replacer = AdfReplacer(rules)
-    client = get_client()
 
     def transform(adf: dict[str, Any], title: str) -> tuple[dict[str, Any], str, list[Any]]:
         new_adf, new_title, change_log = replacer.apply(adf, title)
@@ -55,26 +54,27 @@ async def update_release_version(
         return new_adf, new_title, change_log
 
     try:
-        if dry_run:
-            page = await read_page(client, page_id)
-            preview_adf, preview_title, preview_log = transform(page.adf, page.title)
+        async with get_client() as client:
+            if dry_run:
+                page = await read_page(client, page_id)
+                preview_adf, preview_title, preview_log = transform(page.adf, page.title)
 
-            if not preview_log:
-                return build_no_changes_response(page_id, page.title)
+                if not preview_log:
+                    return build_no_changes_response(page_id, page.title)
 
-            errors = AdfValidator.validate(preview_adf)
-            if errors:
-                return {"status": "VALIDATION_FAILED", "errors": errors}
+                errors = AdfValidator.validate(preview_adf)
+                if errors:
+                    return {"status": "VALIDATION_FAILED", "errors": errors}
 
-            return build_dry_run_response(page.title, preview_title, page.version, preview_log)
+                return build_dry_run_response(page.title, preview_title, page.version, preview_log)
 
-        meta, applied_log = await safe_update(
-            client, page_id, transform, "Release version update via Netra MCP"
-        )
-        if meta is None:
-            return build_no_changes_response(page_id)
+            meta, applied_log = await safe_update(
+                client, page_id, transform, "Release version update via Netra MCP"
+            )
+            if meta is None:
+                return build_no_changes_response(page_id)
 
-        return build_updated_response(client, meta, applied_log)
+            return build_updated_response(client, meta, applied_log)
     except VersionConflictError:
         log.error("update_release_version exhausted retries on version conflict", page_id=page_id)
         return {"status": "VERSION_CONFLICT", "page_id": page_id}

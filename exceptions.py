@@ -27,3 +27,11 @@ class PageNotFoundError(NetraConfluenceError):
 
 class ConfluenceAPIError(NetraConfluenceError):
     """Unclassified Confluence API error."""
+
+
+class MissingCredentialsError(NetraConfluenceError):
+    """HTTP transport call arrived without per-user Confluence credential headers (401-style).
+
+    Never caught and fall back to a shared identity - that would silently
+    reintroduce the service-account attribution problem Tier 1 exists to fix.
+    """

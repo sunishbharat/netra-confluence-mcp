@@ -8,6 +8,7 @@ import httpx
 from exceptions import (
     ConfluenceAPIError,
     ConfluencePermissionError,
+    MissingCredentialsError,
     PageNotFoundError,
     VersionConflictError,
 )
@@ -16,13 +17,20 @@ from models.config import NetraSettings
 
 class ConfluenceClient:
     def __init__(self, settings: NetraSettings) -> None:
+        # NetraSettings allows these to be unset (http transport starts credential-
+        # free); resolving per-user credentials into a client is the one place that
+        # gap must close, so guard here rather than trust every caller upstream.
+        email = settings.confluence_user_email
+        token = settings.confluence_api_token
+        if not email or not token:
+            raise MissingCredentialsError(
+                "ConfluenceClient requires confluence_user_email and confluence_api_token"
+            )
+
         self._settings = settings
         self._http = httpx.AsyncClient(
             base_url=settings.confluence_base_url,
-            auth=httpx.BasicAuth(
-                settings.confluence_user_email,
-                settings.confluence_api_token,
-            ),
+            auth=httpx.BasicAuth(email, token),
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/json",

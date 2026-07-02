@@ -63,6 +63,8 @@ def _make_meta() -> PageMetadata:
 def patch_client(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     fake = MagicMock()
     fake.site_url = "https://test.atlassian.net"
+    fake.__aenter__ = AsyncMock(return_value=fake)
+    fake.__aexit__ = AsyncMock(return_value=False)
     monkeypatch.setattr(module, "get_client", lambda: fake)
     return fake
 

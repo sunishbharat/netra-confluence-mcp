@@ -57,51 +57,51 @@ async def clone_release_report(
         ]
         replacer = AdfReplacer(rules)
 
-        client = get_client()
-        page = await read_page(client, source_page_id)
+        async with get_client() as client:
+            page = await read_page(client, source_page_id)
 
-        space_id = target_space_id or page.space_id
+            space_id = target_space_id or page.space_id
 
-        new_adf, new_title, change_log = replacer.apply(page.adf, page.title)
-        new_adf, date_log = update_date_nodes(new_adf, new_delivery_date)
-        all_change_log = change_log + date_log
+            new_adf, new_title, change_log = replacer.apply(page.adf, page.title)
+            new_adf, date_log = update_date_nodes(new_adf, new_delivery_date)
+            all_change_log = change_log + date_log
 
-        errors = AdfValidator.validate(new_adf)
-        if errors:
-            return {"status": "VALIDATION_FAILED", "errors": errors}
+            errors = AdfValidator.validate(new_adf)
+            if errors:
+                return {"status": "VALIDATION_FAILED", "errors": errors}
 
-        change_summary = AdfDiffer.summarize_changes(all_change_log)
+            change_summary = AdfDiffer.summarize_changes(all_change_log)
 
-        if dry_run:
-            result = DryRunResult(
-                current_title=page.title,
-                new_title=new_title,
-                current_version=page.version,
-                total_changes=len(all_change_log),
-                change_summary=change_summary,
-                change_log=all_change_log,
+            if dry_run:
+                result = DryRunResult(
+                    current_title=page.title,
+                    new_title=new_title,
+                    current_version=page.version,
+                    total_changes=len(all_change_log),
+                    change_summary=change_summary,
+                    change_log=all_change_log,
+                )
+                return result.model_dump()
+
+            meta = await create_page(
+                client,
+                CreatePageRequest(
+                    space_id=space_id,
+                    title=new_title,
+                    adf_body=new_adf,
+                    parent_id=parent_page_id,
+                    status=status,
+                ),
             )
-            return result.model_dump()
-
-        meta = await create_page(
-            client,
-            CreatePageRequest(
-                space_id=space_id,
-                title=new_title,
-                adf_body=new_adf,
-                parent_id=parent_page_id,
-                status=status,
-            ),
-        )
-        return {
-            "status": "CREATED",
-            "page_id": meta.id,
-            "title": meta.title,
-            "version": meta.version,
-            "url": f"{client.site_url}/wiki/spaces/{meta.space_id}/pages/{meta.id}",
-            "total_changes": len(all_change_log),
-            "change_summary": change_summary,
-        }
+            return {
+                "status": "CREATED",
+                "page_id": meta.id,
+                "title": meta.title,
+                "version": meta.version,
+                "url": f"{client.site_url}/wiki/spaces/{meta.space_id}/pages/{meta.id}",
+                "total_changes": len(all_change_log),
+                "change_summary": change_summary,
+            }
     except NetraConfluenceError as e:
         log.error("clone_release_report failed", source_page_id=source_page_id, error=str(e))
         return {"status": "ERROR", "error": str(e)}
