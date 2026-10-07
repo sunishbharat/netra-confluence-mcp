@@ -21,6 +21,20 @@ class NetraSettings(BaseSettings):
         "each request supplies its own via X-Confluence-User-Email.",
     )
     confluence_site_url: str = Field(..., description="Used to build page URLs in responses")
+    # Jira lives on the same Atlassian site as Confluence, so there is no separate Jira
+    # base URL. Both Jira credential fields are optional on every transport: when unset,
+    # get_jira_client() falls back to the same user's Confluence credentials from the same
+    # source, so a Confluence-only user starts the server exactly as before.
+    jira_user_email: str | None = Field(
+        default=None,
+        description="Jira user email for stdio transport. Falls back to confluence_user_email; "
+        "on http transport each request supplies X-Jira-User-Email instead.",
+    )
+    jira_api_token: str | None = Field(
+        default=None,
+        description="Jira API token for stdio transport. Falls back to confluence_api_token; "
+        "on http transport each request supplies X-Jira-Api-Token instead.",
+    )
     log_level: str = Field(default="INFO", description="structlog level")
     json_logs: bool = Field(
         default=False, description="Emit JSON log lines (production/CF) instead of console format"

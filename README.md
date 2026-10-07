@@ -222,6 +222,15 @@ Each team member's Claude Desktop config carries their own headers via `mcp-remo
 - **The endpoint still needs its own gate.** Header passthrough authenticates the *Confluence* call, not the *MCP endpoint* - anyone who can reach `/mcp` and supply any valid Atlassian token can use the server as an open Confluence proxy. Keep the route internal-only, or put an API-key/mTLS gate in front of it at the router, until OAuth 2.0 (Tier 2, see `docs/netra-mcp-confluence-write-phased-design.md` section 16.4) lands.
 - **Don't log the headers.** `X-Confluence-Api-Token` must never end up in request logs. A structlog processor redacts any log field whose key matches `token`/`password`/`api_key`/`authorization` (case-insensitive) to `[REDACTED]` as a backstop, but no code should pass credential values to a log call in the first place.
 
+**Jira tools on http.** The Jira tools resolve credentials from the same request: `X-Jira-User-Email` / `X-Jira-Api-Token` if present, otherwise the `X-Confluence-*` pair (one Atlassian API token works for both products on the same site). Add the Jira pair only if you want Jira calls to use a different token:
+
+```
+"--header", "X-Jira-User-Email: alice@example.com",
+"--header", "X-Jira-Api-Token: ${JIRA_API_TOKEN}"
+```
+
+The two pairs are never mixed, and env credentials are never used on http.
+
 If you don't need a shared server at all, per-user **stdio** (each teammate runs their own local process with their own `.env` - see [Setup](#setup-one-time)) already gives native per-user attribution today with zero extra configuration.
 
 ---
@@ -410,6 +419,27 @@ The AI calls `clone_release_report`. The clone gets:
 
 > "Create a new Confluence page in space MYSPACE titled 'Project Plan' using this ADF body: {...}"
 
+### Clone a Jira template ticket (one or many)
+
+> "Create a clone of the Jira template ticket PROJ-124 and set the summary to ProjectX Variant-A Payment Service."
+
+> "Clone PROJ-124 once for each of these services: Payment, Billing, Ledger. Summary format: ProjectX Variant-A <service name> Service."
+
+The AI expands the summary pattern into one exact summary per issue and calls `clone_jira_issue`. The dry run lists every issue it would create, which fields are copied from the template, and any summary that already exists in the project (those are skipped). Say "apply it" to create them. Each clone:
+- Copies every template field the target project accepts (custom fields, labels, components, priority, description), but not assignee, reporter, attachments, links, or parent
+- Gets an "is cloned by" link from the template
+- Is attributed to you in Jira (you are the reporter)
+
+Up to 50 issues per call. If some fail, the status is `PARTIAL` and each item says what went wrong. Re-running the same request only creates the missing ones.
+
+### Create or edit Jira issues
+
+> "Create 3 Tasks in project PROJ with summaries A, B, and C and label 'release-2'."
+
+> "Change the priority of PROJ-412 to High and add the label 'urgent'."
+
+`create_jira_issue` works like the clone tool without a template. `edit_jira_issue` shows a before/after for every field it would change before writing.
+
 ---
 
 ## How it works
@@ -456,6 +486,9 @@ The server reads pages as ADF (Atlassian Document Format - the native JSON forma
 | `update_release_version` | Like above, also updates date node timestamps | Yes, if `dry_run=False` |
 | `clone_release_report` | Clones a page, updates all version tokens and macro IDs | Yes, if `dry_run=False` |
 | `create_page_from_adf` | Creates a new page from an ADF body | Yes, if `dry_run=False` |
+| `clone_jira_issue` | Clones a Jira template issue into 1-50 new issues | Yes, if `dry_run=False` |
+| `create_jira_issue` | Creates 1-50 new Jira issues without a template | Yes, if `dry_run=False` |
+| `edit_jira_issue` | Edits fields on one Jira issue | Yes, if `dry_run=False` |
 
 All write tools default to `dry_run=True`. You must explicitly say "apply it" or pass `dry_run=False` to make any change.
 
@@ -470,6 +503,7 @@ All write tools default to `dry_run=True`. You must explicitly say "apply it" or
 | `NO_CHANGES` | No occurrences of the search term were found |
 | `VALIDATION_FAILED` | ADF structure check failed; write blocked; `errors` list present |
 | `VERSION_CONFLICT` | Someone else edited the page at the same time; retry |
+| `PARTIAL` | Bulk Jira call where some issues were created and some failed; `results` has one entry per item |
 | `ERROR` | API or network error; `error` field has details |
 
 ---
@@ -555,6 +589,125 @@ CONFLUENCE_TEST_PAGE_ID=<page-id> uv run python -m pytest -m integration
 
 ---
 
+## Testing the Jira tools
+
+The Jira tools (`clone_jira_issue`, `create_jira_issue`, `edit_jira_issue`) can be tested in three layers: unit tests with no Jira connection, direct tool calls through the MCP Inspector, and end-to-end prompts from your AI client. Do the layers in that order.
+
+> **Use a sandbox Jira project.** Every call with `dry_run=False` creates or edits real issues. Never point the apply steps below at a production project.
+
+### 1. Unit tests (no Jira connection)
+
+All Jira HTTP calls are mocked, so these run anywhere:
+
+```bash
+uv run python -m pytest tests/test_jira_*.py
+```
+
+| File | What it covers |
+|---|---|
+| `tests/test_jira_client.py` | Auth header, HTTP status mapping, 429 retry honoring `Retry-After`, no retry of a POST/PUT whose response was lost |
+| `tests/test_jira_api.py` | Each REST call, bulk-create partial-failure parsing, createmeta pagination, exact-match duplicate search |
+| `tests/test_jira_fields.py` | Field copying and normalization, override key resolution, required-field check, JQL escaping, plain text to ADF, input validation |
+| `tests/test_jira_shared.py` | Credential resolution on stdio and http, `CREATED` / `PARTIAL` / `ERROR` / `NO_CHANGES` mapping, skip-existing, link failures |
+| `tests/test_jira_tools.py` | All three tools: dry run never writes, the payload sent on apply, validation blocks writes |
+
+With coverage:
+
+```bash
+uv run python -m pytest tests/test_jira_*.py --cov=netra_jira --cov-report=term-missing
+```
+
+### 2. Prepare a sandbox project
+
+You need:
+
+- A Jira project you can freely create issues in (for example `SANDBOX`)
+- A **template issue** in it that looks like a real template: a few labels, a component, a priority, a description, and ideally one required custom field
+- Jira permissions on that project: **Browse projects**, **Create issues**, **Edit issues**, and **Link issues**
+
+Credentials: on stdio the Jira tools use `JIRA_USER_EMAIL` / `JIRA_API_TOKEN` from `.env` if both are set, otherwise your `CONFLUENCE_USER_EMAIL` / `CONFLUENCE_API_TOKEN`. One Atlassian API token works for both products, so usually nothing extra is needed.
+
+### 3. Direct tool calls with the MCP Inspector
+
+The Inspector calls a tool with exact arguments, with no AI in between, so you can test each case deterministically.
+
+```bash
+npx @modelcontextprotocol/inspector uv run python server.py
+```
+
+Open the URL it prints, go to **Tools**, pick a tool, fill in the arguments, and run it. Work through these cases in order, replacing `SANDBOX-1` with your template key:
+
+| # | Tool and arguments | Expected result |
+|---|---|---|
+| 1 | `clone_jira_issue`, `template_issue_key="SANDBOX-1"`, `items=[{"summary": "Test ProjectX Variant-A Payment Service"}]` | `DRY_RUN`, `to_create: 1`, `copied_fields` lists the template's labels, components, priority, description, and custom fields |
+| 2 | Same as 1 with `dry_run=false` | `CREATED`, one `issue_key` and `url` |
+| 3 | Same as 2 again | `NO_CHANGES`, the item shows `SKIPPED_EXISTS` with the key from step 2. No duplicate is created |
+| 4 | `items` with three summaries (`...Payment...`, `...Billing...`, `...Ledger...`), `dry_run=false` | `CREATED` for the two new ones, `SKIPPED_EXISTS` for Payment |
+| 5 | One item with `"field_overrides": {"labels": ["override-test"]}`, dry run | `DRY_RUN`, that item lists `"overrides": ["labels"]` |
+| 6 | One item with `"field_overrides": {"No Such Field": 1}` | `VALIDATION_FAILED` naming the unknown field. Nothing is created |
+| 7 | Two items, one with an invalid value for a select field (for example `{"priority": {"name": "NotAPriority"}}`), `dry_run=false` | `PARTIAL`: one item `CREATED`, the other `FAILED` with Jira's error message |
+| 8 | `target_project_key` set to a second sandbox project, dry run | `DRY_RUN`, `components` and versions appear in `dropped_fields` |
+| 9 | `create_jira_issue`, `project_key="SANDBOX"`, `issue_type="Task"`, `items=[{"summary": "Test create", "description": "line one\n\nline two"}]`, `dry_run=false` | `CREATED`; the description shows two paragraphs in Jira |
+| 10 | `edit_jira_issue`, `issue_key` from step 9, `summary="Test create (edited)"`, `field_overrides={"labels": ["edited"]}` | `DRY_RUN` with a `before` / `after` entry for each field |
+| 11 | Same as 10 with `dry_run=false` | `UPDATED`, `fields_updated: ["labels", "summary"]` |
+| 12 | Same as 11 again | `NO_CHANGES` |
+| 13 | `clone_jira_issue` with `template_issue_key="SANDBOX-99999"` | `ERROR` with a not-found message |
+
+### 4. Check the results in Jira
+
+Open the issues created in steps 2, 4 and 7 and confirm:
+
+- **Fields:** labels, components, priority, description, and custom fields match the template, and the summary is the one you passed
+- **Not copied:** assignee is empty (or the project default), and **reporter is you**, not the template's reporter
+- **Clone link:** the new issue shows **"clones SANDBOX-1"** and the template shows **"is cloned by"** for each clone. If the direction is reversed, swap `inwardIssue` and `outwardIssue` in `netra_jira/api.py:create_clone_link`
+- **Partial failure (step 7):** the issue Jira reported as created is the one whose summary matches the `CREATED` item, not the failed one
+
+Also try one summary with special characters (for example `Test - Variant[A]: Payment+`), create it, then run the same call again. The second run must show `SKIPPED_EXISTS`. If it creates a duplicate, the duplicate search does not handle that character.
+
+### 5. End-to-end from your AI client
+
+With the server connected to Claude Desktop or Copilot (see [Connect your AI client](#connect-your-ai-client)), try the real prompts:
+
+> "Clone the template ticket SANDBOX-1 and set the summary to ProjectX Variant-A Payment Service."
+
+> "Clone SANDBOX-1 once for each of these services: Payment, Billing, Ledger. Summary format: ProjectX Variant-B <service name> Service."
+
+Check that the AI:
+
+1. Expands the summary pattern into exact summaries and shows you the dry-run preview **before** creating anything
+2. Only applies after you say "apply it"
+3. Reports each created issue key, and any `SKIPPED_EXISTS` or `FAILED` items, rather than a single success message
+
+### 6. Testing over http (per-user headers)
+
+Start the server in http mode, then connect the Inspector with **Transport** "Streamable HTTP" and URL `http://127.0.0.1:8765/mcp`:
+
+```bash
+SERVER_TRANSPORT=http uv run python server.py
+```
+
+In the Inspector's connection settings, add the headers `X-Confluence-User-Email` / `X-Confluence-Api-Token` (or `X-Jira-User-Email` / `X-Jira-Api-Token`) and repeat case 1. Then confirm:
+
+- With no headers, every Jira tool returns `{"status": "ERROR", "error": "missing per-user Jira credentials"}`, even if credentials are set in the server's `.env`
+- With only `X-Jira-User-Email` and no `X-Jira-Api-Token`, the call fails rather than mixing the Jira email with the Confluence token
+
+### 7. Clean up
+
+The tools never delete issues. Remove the test issues in Jira yourself, for example by searching `project = SANDBOX AND summary ~ "Test"` and using **Bulk change -> Delete issues**.
+
+### Jira troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| `VALIDATION_FAILED` with `missing required [...]` | The target project requires a field the template does not have. Add it with `field_overrides` |
+| `VALIDATION_FAILED` with `issue type '...' not available` | The target project does not have the template's issue type |
+| `ERROR` with `Permission denied (HTTP 403)` | Your account lacks Create, Edit, or Browse permission on the project |
+| Issue created but the item has `link_error` | Your account lacks **Link issues** permission, or the `Cloners` link type is disabled on the site |
+| `ERROR` with `Rate limited by Jira (HTTP 429)` | Atlassian's rate limit was still in force after 3 attempts. Wait a minute and re-run; existing issues are skipped |
+| `ERROR` with `Network error` on apply | The response was lost and the request was not retried, because issues may already exist. Re-run the dry run to see which were created |
+
+---
+
 ## Development commands
 
 ```bash
@@ -562,5 +715,5 @@ uv sync                                                    # install all deps
 uv run ruff check .                                        # lint
 uv run ruff format --check .                               # format check
 uv run mypy --strict .                                     # type check
-uv run python -m pytest --cov=confluence --cov-report=term-missing
+uv run python -m pytest --cov=confluence --cov=netra_jira --cov-report=term-missing
 ```
