@@ -12,6 +12,12 @@ MAX_BULK_ITEMS = 50
 # whole batch out of a partial-failure state for an error we can detect up front.
 MAX_SUMMARY_LENGTH = 255
 
+# Most issues one search_jira_issues call returns. A broad JQL can match thousands of
+# issues; the cap keeps the response small enough for the MCP client's context, and the
+# response says when more matches exist so the caller narrows the query instead.
+MAX_SEARCH_RESULTS = 100
+DEFAULT_SEARCH_RESULTS = 50
+
 ItemStatus = Literal["WILL_CREATE", "SKIPPED_EXISTS", "CREATED", "FAILED"]
 
 
@@ -119,6 +125,75 @@ class JiraIssue(BaseModel):
     fields: dict[str, Any] = Field(
         ..., description="Raw fields object from the v3 API (descriptions are ADF)"
     )
+    field_names: dict[str, str] = Field(
+        default_factory=dict,
+        description="Field ID -> display name; filled only when read with expand=names",
+    )
+
+
+class IssueSearchQuery(BaseModel):
+    """Validated input for search_jira_issues."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    jql: str = Field(..., description="JQL query, passed to Jira unchanged")
+    max_results: int = Field(
+        default=DEFAULT_SEARCH_RESULTS,
+        ge=1,
+        le=MAX_SEARCH_RESULTS,
+        description="Most issues to return",
+    )
+    fields: list[str] = Field(
+        default_factory=list,
+        description="Extra field IDs or exact field names to include per issue",
+    )
+
+    @field_validator("jql")
+    @classmethod
+    def jql_must_not_be_empty(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("jql must not be empty")
+        return stripped
+
+
+class JiraComment(BaseModel):
+    """One issue comment, body flattened from ADF to plain text."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    id: str = Field(..., description="Comment ID")
+    author: str = Field(..., description="Author display name")
+    created: str = Field(..., description="Creation timestamp as returned by Jira")
+    updated: str = Field(..., description="Last update timestamp as returned by Jira")
+    body: str = Field(..., description="Comment text")
+
+
+class CommentPage(BaseModel):
+    """The most recent comments on an issue, newest first."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    comments: list[JiraComment] = Field(..., description="Comments, newest first")
+    total: int = Field(..., description="Total comments on the issue")
+
+
+class SearchHit(BaseModel):
+    """One issue returned by a JQL search, with only the requested fields."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    key: str = Field(..., description="Issue key")
+    fields: dict[str, Any] = Field(..., description="Raw values of the requested fields")
+
+
+class SearchResult(BaseModel):
+    """Issues matching a JQL search, capped at the requested maximum."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    issues: list[SearchHit] = Field(..., description="Matching issues in Jira's order")
+    truncated: bool = Field(..., description="More issues match than were returned")
 
 
 class IssueTypeMeta(BaseModel):

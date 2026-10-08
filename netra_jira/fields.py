@@ -146,6 +146,41 @@ def resolve_field_keys(
     return resolved, errors
 
 
+def resolve_field_ids(
+    requested: list[str],
+    field_meta: list[FieldMeta],
+) -> tuple[list[str], list[str]]:
+    """Map requested fields (field ID or exact field name) to field IDs, for reads.
+
+    Same matching as resolve_field_keys: field ID first, then a case-insensitive exact
+    name. Returns (field_ids, errors) with duplicates removed and request order kept.
+    """
+    by_id = {f.field_id for f in field_meta}
+    by_name: dict[str, list[str]] = {}
+    for f in field_meta:
+        by_name.setdefault(f.name.casefold(), []).append(f.field_id)
+
+    field_ids: list[str] = []
+    errors: list[str] = []
+    for key in requested:
+        if key in by_id:
+            field_id = key
+        else:
+            matches = by_name.get(key.casefold(), [])
+            if not matches:
+                errors.append(f"unknown field '{key}'")
+                continue
+            if len(matches) > 1:
+                errors.append(
+                    f"field name '{key}' is ambiguous ({', '.join(matches)}); use the field ID"
+                )
+                continue
+            field_id = matches[0]
+        if field_id not in field_ids:
+            field_ids.append(field_id)
+    return field_ids, errors
+
+
 def missing_required_fields(fields: dict[str, Any], create_fields: list[FieldMeta]) -> list[str]:
     """Names of required fields with no value and no Jira default."""
     return [

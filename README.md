@@ -148,6 +148,82 @@ The Confluence tools appear in the tool list once the bridge connects to the run
 
 3. Reload VS Code. The tools are available in Copilot Chat when you click the tools icon.
 
+### VS Code with GitHub Copilot - shared server on CF
+
+When the server is deployed on Cloud Foundry (see [Docker and cloud deployment](#docker-and-cloud-deployment)), Copilot connects to it over http and sends your own Atlassian credentials as headers. Nothing runs locally.
+
+1. Open the MCP configuration: `Cmd+Shift+P` / `Ctrl+Shift+P` -> "MCP: Open User Configuration". The file is `mcp.json`:
+   - **macOS:** `~/Library/Application Support/Code/User/mcp.json`
+   - **Windows:** `%APPDATA%\Code\User\mcp.json`
+   - Or per project: `.vscode/mcp.json` in the workspace
+
+2. Add the server (replace the URL with your CF route, and the email and tokens with your own):
+
+```json
+{
+  "servers": {
+    "netra-confluence-jira-mcp": {
+      "url": "https://<your-cf-route>/mcp",
+      "type": "http",
+      "headers": {
+        "X-Confluence-User-Email": "you@example.com",
+        "X-Confluence-Api-Token": "<your Atlassian API token>",
+        "X-Jira-User-Email": "you@example.com",
+        "X-Jira-Api-Token": "<your Atlassian API token>"
+      }
+    }
+  },
+  "inputs": []
+}
+```
+
+3. Start the server from Command Palette -> "MCP: List Servers" -> `netra-confluence-jira-mcp` -> **Start** (or **Restart** after editing). The Confluence and Jira tools appear in Copilot Agent mode under the tools icon.
+
+**Option: same token for Confluence and Jira (two headers).** An Atlassian API token works for Confluence and Jira on the same site. If both pairs above would hold the same email and token, drop the `X-Jira-*` lines; the Jira tools then use the `X-Confluence-*` pair:
+
+```json
+{
+  "servers": {
+    "netra-confluence-jira-mcp": {
+      "url": "https://<your-cf-route>/mcp",
+      "type": "http",
+      "headers": {
+        "X-Confluence-User-Email": "you@example.com",
+        "X-Confluence-Api-Token": "<your Atlassian API token>"
+      }
+    }
+  },
+  "inputs": []
+}
+```
+
+Remove both `X-Jira-*` lines or neither. With only one of them present, Jira calls fail rather than mixing a Jira email with the Confluence token. Use the four-header version only when Jira needs a different token.
+
+Notes:
+- **The URL must end in `/mcp`.** The root URL of the route is not the MCP endpoint.
+- **Keep the token out of shared files.** This file holds a live API token in plain text. Never commit a `.vscode/mcp.json` that contains one. To have VS Code ask for the token once and keep it in its encrypted secret storage instead, use an input:
+
+```json
+{
+  "inputs": [
+    {"type": "promptString", "id": "atl-token", "description": "Atlassian API token", "password": true}
+  ],
+  "servers": {
+    "netra-confluence-jira-mcp": {
+      "url": "https://<your-cf-route>/mcp",
+      "type": "http",
+      "headers": {
+        "X-Confluence-User-Email": "you@example.com",
+        "X-Confluence-Api-Token": "${input:atl-token}"
+      }
+    }
+  }
+}
+```
+
+- **Updating the token:** edit the value in `mcp.json` and restart the server from "MCP: List Servers". With an input, clear the stored value (Command Palette, type "MCP") and VS Code asks for the new token on the next start.
+- **Credential errors:** a tool response of `{"status": "ERROR", "error": "missing per-user ... credentials"}` means the headers did not reach the server; check the header names and that the server was restarted after editing.
+
 ### Other MCP clients
 
 Use `uv run python server.py` as the server command with the project directory as the working directory. By default the server uses stdio transport (a child process spawned per client) - the standard transport for local MCP clients.
@@ -440,6 +516,59 @@ Up to 50 issues per call. If some fail, the status is `PARTIAL` and each item sa
 
 `create_jira_issue` works like the clone tool without a template. `edit_jira_issue` shows a before/after for every field it would change before writing.
 
+### Create Jira issues from an input file
+
+Keep the ticket details in a file in your workspace and let the AI read it. The server never reads the file itself (on a shared http deployment it has no access to your machine): the AI client reads the file and passes its contents to `create_jira_issue`, or to `clone_jira_issue` if the file names a template.
+
+In VS Code Copilot Agent mode, attach the file with `#file:` (or drag it into the chat):
+
+> "Create Jira tickets from #file:tickets/hadoop-rollout.md. Use the project, issue type, and fields given in the file. Show me the dry run first."
+
+Check the preview, then say "create them". Any format the AI can read works (Markdown, YAML, JSON, CSV). Markdown with one section per ticket is the easiest to write by hand:
+
+```markdown
+Project: PROJ
+Issue type: Task
+
+## Ticket: [Hadoop][vari-12] abc1 ingestion retries
+Priority: High
+Labels: hadoop, release-2
+Components: Backend
+Service Name: Payment
+
+Description:
+The ingestion job for abc1 fails on retries.
+
+Add idempotent writes and an alert when retries exceed 3.
+
+## Ticket: [Hadoop][vari-12] abc2 ingestion retries
+Priority: Medium
+Labels: hadoop
+Service Name: Billing
+
+Description:
+Same fix for abc2.
+```
+
+Field names in the file, such as "Service Name", are matched to Jira fields by their display name. To create tickets from a template instead, put `Clone template: PROJ-1285` at the top of the file and list one summary per ticket.
+
+Things to know:
+
+- **Up to 50 tickets per call.** For a larger file, ask the AI to create them in batches of 50.
+- **Re-runs are safe.** Tickets whose summary already exists in the project are skipped, so after fixing a failed item you can run the whole file again.
+- **Field values are converted by the AI.** A value like `Priority: High` must become Jira's API shape. A wrongly shaped value is not caught by the dry run; that ticket comes back `FAILED` with Jira's error message, the rest are created (`PARTIAL`), and you fix the file and re-run.
+- **Descriptions are plain text.** Blank lines become paragraphs and line breaks are kept, but Markdown bullets, bold, and headings are not converted to Jira formatting.
+
+### Read, search, and analyse Jira issues
+
+> "Show me PROJ-1285."
+
+> "Read PROJ-1285 including comments and give me feedback: is the description clear, are the acceptance criteria testable, and what is missing before a developer can start?"
+
+> "Find all issues in PROJ with Hadoop in the summary and show their status and Service Name."
+
+`get_jira_issue` returns one issue in readable form: description as plain text, custom fields by display name (for example "Acceptance Criteria"), parent, sub-tasks, linked issues, and attachment file names. Ask for comments to get the 20 most recent. `search_jira_issues` runs a JQL query and returns up to 100 issues with key, summary, status, assignee, priority, and any extra fields you name. Both are read-only. The AI does the analysis itself; it cannot read attachment contents, and its feedback stays in the chat.
+
 ---
 
 ## How it works
@@ -489,6 +618,8 @@ The server reads pages as ADF (Atlassian Document Format - the native JSON forma
 | `clone_jira_issue` | Clones a Jira template issue into 1-50 new issues | Yes, if `dry_run=False` |
 | `create_jira_issue` | Creates 1-50 new Jira issues without a template | Yes, if `dry_run=False` |
 | `edit_jira_issue` | Edits fields on one Jira issue | Yes, if `dry_run=False` |
+| `get_jira_issue` | Reads one Jira issue, optionally with its recent comments | Never |
+| `search_jira_issues` | Finds Jira issues with a JQL query (up to 100) | Never |
 
 All write tools default to `dry_run=True`. You must explicitly say "apply it" or pass `dry_run=False` to make any change.
 
@@ -496,7 +627,7 @@ All write tools default to `dry_run=True`. You must explicitly say "apply it" or
 
 | Status | Meaning |
 |---|---|
-| `INSPECTION` | Read-only result; `jql_queries` and `unique_strings` present |
+| `INSPECTION` | Read-only result (`inspect_page_jql`, `get_jira_issue`, `search_jira_issues`) |
 | `DRY_RUN` | Preview only; nothing written; `change_log` present |
 | `UPDATED` | Page updated; `version` and `url` present |
 | `CREATED` | New page created; `page_id` and `url` present |
@@ -545,9 +676,12 @@ curl http://localhost:8765/mcp      # MCP endpoint
 Requires Docker Desktop 4.x+ with buildx (shipped by default).
 
 ```bash
-bash scripts/docker-build-local.sh
-docker run -p 8765:8765 --env-file .env ghcr.io/sunishbharat/netra-confluence-mcp:dev
+VERSION=dev bash scripts/docker-build-local.sh
+docker run -p 8765:8765 --env-file .env -e SERVER_TRANSPORT=http -e SERVER_HOST=0.0.0.0 \
+    ghcr.io/sunishbharat/netra-confluence-mcp:dev
 ```
+
+The `-e` flags matter: `--env-file` overrides the image's defaults, and a local `.env` with `SERVER_HOST=127.0.0.1` would make the server unreachable through the published port. Run the build script from Git Bash on Windows.
 
 ### Build and push multi-platform (amd64 + arm64) and deploy to CF
 
@@ -559,15 +693,15 @@ export REGISTRY=ghcr.io/sunishbharat
 ./scripts/cf-deploy.sh   # builds both platforms, pushes to GHCR, then cf push
 ```
 
-Set Confluence credentials as CF secrets once (they survive `cf push`/`cf restage`):
+Set the Atlassian site URLs once (they survive `cf push`/`cf restage`). The Confluence and Jira tools both use them:
 
 ```bash
 cf set-env netra-confluence-mcp CONFLUENCE_BASE_URL https://your-org.atlassian.net
 cf set-env netra-confluence-mcp CONFLUENCE_SITE_URL https://your-org.atlassian.net
-cf set-env netra-confluence-mcp CONFLUENCE_USER_EMAIL service-account@example.com
-cf set-env netra-confluence-mcp CONFLUENCE_API_TOKEN <token>
 cf restage netra-confluence-mcp
 ```
+
+Do not set `CONFLUENCE_API_TOKEN`, `CONFLUENCE_USER_EMAIL`, `JIRA_USER_EMAIL`, or `JIRA_API_TOKEN` on CF. On http they are ignored: each user's MCP client sends their own credentials as headers (see [VS Code with GitHub Copilot - shared server on CF](#vs-code-with-github-copilot---shared-server-on-cf)).
 
 CI builds and pushes a multi-arch image to GHCR automatically on every `v*.*.*` tag push (`.github/workflows/docker.yml`).
 
@@ -591,7 +725,7 @@ CONFLUENCE_TEST_PAGE_ID=<page-id> uv run python -m pytest -m integration
 
 ## Testing the Jira tools
 
-The Jira tools (`clone_jira_issue`, `create_jira_issue`, `edit_jira_issue`) can be tested in three layers: unit tests with no Jira connection, direct tool calls through the MCP Inspector, and end-to-end prompts from your AI client. Do the layers in that order.
+The Jira tools (`clone_jira_issue`, `create_jira_issue`, `edit_jira_issue`, `get_jira_issue`, `search_jira_issues`) can be tested in three layers: unit tests with no Jira connection, direct tool calls through the MCP Inspector, and end-to-end prompts from your AI client. Do the layers in that order.
 
 > **Use a sandbox Jira project.** Every call with `dry_run=False` creates or edits real issues. Never point the apply steps below at a production project.
 
@@ -609,7 +743,8 @@ uv run python -m pytest tests/test_jira_*.py
 | `tests/test_jira_api.py` | Each REST call, bulk-create partial-failure parsing, createmeta pagination, exact-match duplicate search |
 | `tests/test_jira_fields.py` | Field copying and normalization, override key resolution, required-field check, JQL escaping, plain text to ADF, input validation |
 | `tests/test_jira_shared.py` | Credential resolution on stdio and http, `CREATED` / `PARTIAL` / `ERROR` / `NO_CHANGES` mapping, skip-existing, link failures |
-| `tests/test_jira_tools.py` | All three tools: dry run never writes, the payload sent on apply, validation blocks writes |
+| `tests/test_jira_tools.py` | The three write tools: dry run never writes, the payload sent on apply, validation blocks writes |
+| `tests/test_jira_read_tools.py` | Readable formatting, `get_jira_issue` with and without comments, `search_jira_issues` columns, extra fields, truncation, errors |
 
 With coverage:
 
@@ -652,6 +787,9 @@ Open the URL it prints, go to **Tools**, pick a tool, fill in the arguments, and
 | 11 | Same as 10 with `dry_run=false` | `UPDATED`, `fields_updated: ["labels", "summary"]` |
 | 12 | Same as 11 again | `NO_CHANGES` |
 | 13 | `clone_jira_issue` with `template_issue_key="SANDBOX-99999"` | `ERROR` with a not-found message |
+| 14 | `get_jira_issue`, `issue_key="SANDBOX-1"`, `include_comments=true` | `INSPECTION`; custom fields appear under their display names, and `comments` lists the newest first |
+| 15 | `search_jira_issues`, `jql="project = SANDBOX AND summary ~ \"Test\""`, `fields=["labels"]` | `INSPECTION`; one row per issue created above, each with a `Labels` column |
+| 16 | `search_jira_issues`, `jql="nope = 1"` | `ERROR` with Jira's JQL error message |
 
 ### 4. Check the results in Jira
 

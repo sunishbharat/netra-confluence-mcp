@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from models.jira import MAX_BULK_ITEMS, CloneBatch, CreateBatch, FieldMeta
+from models.jira import MAX_BULK_ITEMS, CloneBatch, CreateBatch, FieldMeta, IssueSearchQuery
 from netra_jira.fields import (
     adf_to_text,
     build_clone_fields,
@@ -14,6 +14,7 @@ from netra_jira.fields import (
     missing_required_fields,
     normalize_field_value,
     plain_text_to_adf,
+    resolve_field_ids,
     resolve_field_keys,
     summary_search_jql,
     text_search_phrase,
@@ -276,3 +277,41 @@ def test_item_strips_summary() -> None:
 def test_item_rejects_unknown_keys() -> None:
     with pytest.raises(ValidationError):
         CloneBatch(items=[{"summary": "a", "assignee": "x"}])  # type: ignore[list-item]
+
+
+# --- read-side helpers -----------------------------------------------------------
+
+_SITE_FIELDS = [
+    FieldMeta(field_id="labels", name="Labels"),
+    FieldMeta(field_id="customfield_10010", name="Service Name"),
+    FieldMeta(field_id="customfield_1", name="Team"),
+    FieldMeta(field_id="customfield_2", name="Team"),
+]
+
+
+def test_resolve_field_ids_by_id_and_name() -> None:
+    ids, errors = resolve_field_ids(["labels", "service name", "customfield_10010"], _SITE_FIELDS)
+    assert ids == ["labels", "customfield_10010"]
+    assert errors == []
+
+
+def test_resolve_field_ids_unknown_and_ambiguous() -> None:
+    ids, errors = resolve_field_ids(["Nope", "Team", "customfield_2"], _SITE_FIELDS)
+    assert ids == ["customfield_2"]
+    assert errors == [
+        "unknown field 'Nope'",
+        "field name 'Team' is ambiguous (customfield_1, customfield_2); use the field ID",
+    ]
+
+
+def test_search_query_strips_jql() -> None:
+    assert IssueSearchQuery(jql="  project = PROJ  ").jql == "project = PROJ"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"jql": "  "}, {"jql": "x", "max_results": 0}, {"jql": "x", "max_results": 101}],
+)
+def test_search_query_rejects_invalid(kwargs: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        IssueSearchQuery(**kwargs)

@@ -10,10 +10,13 @@ from netra_jira.api import (
     bulk_create_issues,
     create_clone_link,
     find_existing_summaries,
+    get_all_fields,
     get_create_fields,
     get_edit_fields,
     get_issue,
+    get_issue_comments,
     get_project_issue_types,
+    search_issues,
     update_issue,
 )
 from netra_jira.client import JiraClient
@@ -193,3 +196,109 @@ async def test_update_issue_puts_fields(httpx_mock: HTTPXMock, jira: JiraClient)
     await update_issue(jira, "PROJ-1", {"summary": "New"})
     body = json.loads(httpx_mock.get_requests()[0].content)
     assert body == {"fields": {"summary": "New"}}
+
+
+# --- read tools ------------------------------------------------------------------
+
+
+async def test_get_issue_with_names(httpx_mock: HTTPXMock, jira: JiraClient) -> None:
+    httpx_mock.add_response(
+        url=f"{API}/issue/PROJ-124?expand=names",
+        json={
+            "id": "10001",
+            "key": "PROJ-124",
+            "fields": {"summary": "Template", "customfield_10010": "x"},
+            "names": {"summary": "Summary", "customfield_10010": "Service Name"},
+        },
+    )
+    issue = await get_issue(jira, "PROJ-124", with_names=True)
+    assert issue.field_names["customfield_10010"] == "Service Name"
+
+
+async def test_get_issue_comments_newest_first(httpx_mock: HTTPXMock, jira: JiraClient) -> None:
+    httpx_mock.add_response(
+        url=f"{API}/issue/PROJ-1/comment?orderBy=-created&maxResults=20",
+        json={
+            "total": 31,
+            "comments": [
+                {
+                    "id": "7",
+                    "author": {"accountId": "u1", "displayName": "Alice"},
+                    "created": "2026-10-01T10:00:00.000+0000",
+                    "updated": "2026-10-01T10:00:00.000+0000",
+                    "body": {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [
+                            {"type": "paragraph", "content": [{"type": "text", "text": "Ready?"}]}
+                        ],
+                    },
+                }
+            ],
+        },
+    )
+    page = await get_issue_comments(jira, "PROJ-1", 20)
+    assert page.total == 31
+    assert page.comments[0].author == "Alice"
+    assert page.comments[0].body == "Ready?"
+
+
+async def test_get_all_fields(httpx_mock: HTTPXMock, jira: JiraClient) -> None:
+    httpx_mock.add_response(
+        url=f"{API}/field",
+        json=[{"id": "labels", "name": "Labels"}, {"id": "customfield_1", "name": "Team"}],
+    )
+    fields = await get_all_fields(jira)
+    assert [(f.field_id, f.name) for f in fields] == [
+        ("labels", "Labels"),
+        ("customfield_1", "Team"),
+    ]
+
+
+async def test_search_issues_paginates_and_truncates(
+    httpx_mock: HTTPXMock, jira: JiraClient
+) -> None:
+    httpx_mock.add_response(
+        url=f"{API}/search/jql",
+        method="POST",
+        json={
+            "issues": [{"key": "PROJ-1", "fields": {}}, {"key": "PROJ-2", "fields": {}}],
+            "nextPageToken": "t1",
+        },
+    )
+    httpx_mock.add_response(
+        url=f"{API}/search/jql",
+        method="POST",
+        json={"issues": [{"key": "PROJ-3", "fields": {}}], "nextPageToken": "t2"},
+    )
+    result = await search_issues(jira, "project = PROJ", ["summary"], 3)
+    assert [h.key for h in result.issues] == ["PROJ-1", "PROJ-2", "PROJ-3"]
+    assert result.truncated is True
+    first, second = (json.loads(r.content) for r in httpx_mock.get_requests())
+    assert first == {"jql": "project = PROJ", "fields": ["summary"], "maxResults": 3}
+    assert second["nextPageToken"] == "t1"
+    assert second["maxResults"] == 1
+
+
+async def test_search_issues_last_page_not_truncated(
+    httpx_mock: HTTPXMock, jira: JiraClient
+) -> None:
+    httpx_mock.add_response(
+        url=f"{API}/search/jql",
+        method="POST",
+        json={"issues": [{"key": "PROJ-1", "fields": {"summary": "a"}}]},
+    )
+    result = await search_issues(jira, "project = PROJ", ["summary"], 50)
+    assert [h.key for h in result.issues] == ["PROJ-1"]
+    assert result.truncated is False
+
+
+async def test_search_issues_invalid_jql_raises(httpx_mock: HTTPXMock, jira: JiraClient) -> None:
+    httpx_mock.add_response(
+        url=f"{API}/search/jql",
+        method="POST",
+        status_code=400,
+        json={"errorMessages": ["Field 'nope' does not exist."]},
+    )
+    with pytest.raises(JiraAPIError, match="does not exist"):
+        await search_issues(jira, "nope = 1", ["summary"], 50)

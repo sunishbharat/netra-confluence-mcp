@@ -17,6 +17,8 @@ from models.config import NetraSettings
 from netra_jira.tools.clone_issue import clone_jira_issue
 from netra_jira.tools.create_issue import create_jira_issue
 from netra_jira.tools.edit_issue import edit_jira_issue
+from netra_jira.tools.read_issue import get_jira_issue
+from netra_jira.tools.search_issues import search_jira_issues
 
 logger = structlog.get_logger(__name__)
 
@@ -24,7 +26,8 @@ server = FastMCP(
     "netra-confluence-writer",
     instructions=(
         "Confluence page inspection and write operations via ADF transformation, and Jira "
-        "issue create, template clone, and edit. All write tools default to dry_run=True: "
+        "issue read, JQL search, create, template clone, and edit. "
+        "All write tools default to dry_run=True: "
         "show the preview to the user before calling again with dry_run=False."
     ),
 )
@@ -37,6 +40,8 @@ server.tool()(create_page_from_adf)
 server.tool()(create_jira_issue)
 server.tool()(clone_jira_issue)
 server.tool()(edit_jira_issue)
+server.tool()(get_jira_issue)
+server.tool()(search_jira_issues)
 
 
 @server.custom_route("/health", methods=["GET"])

@@ -8,13 +8,17 @@ import structlog
 from exceptions import JiraAPIError
 from models.jira import (
     BulkCreateResponse,
+    CommentPage,
     CreatedIssue,
     FieldMeta,
     IssueTypeMeta,
+    JiraComment,
     JiraIssue,
+    SearchHit,
+    SearchResult,
 )
 from netra_jira.client import JiraClient, describe_error_body
-from netra_jira.fields import summary_search_jql
+from netra_jira.fields import adf_to_text, is_adf_doc, summary_search_jql
 
 log = structlog.get_logger()
 
@@ -28,6 +32,10 @@ _META_PAGE_SIZE = 50
 _SEARCH_PAGE_SIZE = 50
 _MAX_SEARCH_PAGES = 5
 
+# Largest page POST /search/jql returns when issue fields are requested; asking for more
+# is silently capped by Jira, so pages are requested at this size and paginated.
+_SEARCH_MAX_PAGE_SIZE = 100
+
 # Concurrent duplicate-check searches per batch: parallel enough that a 50-item batch
 # does not take 50 sequential round-trips, low enough to stay clear of rate limits.
 _SEARCH_CONCURRENCY = 5
@@ -37,15 +45,23 @@ _SEARCH_CONCURRENCY = 5
 _CLONE_LINK_TYPE = "Cloners"
 
 
-async def get_issue(client: JiraClient, issue_key: str) -> JiraIssue:
-    """GET /rest/api/3/issue/{key} with all fields (v3: descriptions are ADF)."""
-    response = await client.get(f"/rest/api/3/issue/{issue_key}")
+async def get_issue(client: JiraClient, issue_key: str, *, with_names: bool = False) -> JiraIssue:
+    """GET /rest/api/3/issue/{key} with all fields (v3: descriptions are ADF).
+
+    with_names=True adds expand=names so field_names maps each field ID to its display name.
+    """
+    params = {"expand": "names"} if with_names else None
+    response = await client.get(f"/rest/api/3/issue/{issue_key}", params=params)
     data: dict[str, Any] = response.json()
     fields = data.get("fields")
     if not isinstance(fields, dict):
         raise JiraAPIError(f"Issue {issue_key} response has no fields object")
     project = fields.get("project") or {}
     issue_type = fields.get("issuetype") or {}
+    raw_names = data.get("names") if with_names else None
+    field_names = (
+        {str(k): str(v) for k, v in raw_names.items()} if isinstance(raw_names, dict) else {}
+    )
     return JiraIssue(
         id=str(data["id"]),
         key=str(data["key"]),
@@ -53,7 +69,79 @@ async def get_issue(client: JiraClient, issue_key: str) -> JiraIssue:
         issue_type_name=str(issue_type.get("name", "")),
         summary=str(fields.get("summary") or ""),
         fields=fields,
+        field_names=field_names,
     )
+
+
+async def get_issue_comments(client: JiraClient, issue_key: str, max_results: int) -> CommentPage:
+    """The most recent comments on an issue, newest first, bodies flattened to text."""
+    response = await client.get(
+        f"/rest/api/3/issue/{issue_key}/comment",
+        params={"orderBy": "-created", "maxResults": max_results},
+    )
+    data: dict[str, Any] = response.json()
+    comments: list[JiraComment] = []
+    for raw in data.get("comments") or []:
+        if not isinstance(raw, dict):
+            continue
+        author = raw.get("author") or {}
+        body = raw.get("body")
+        comments.append(
+            JiraComment(
+                id=str(raw.get("id", "")),
+                author=str(author.get("displayName") or author.get("accountId") or ""),
+                created=str(raw.get("created", "")),
+                updated=str(raw.get("updated", "")),
+                body=(
+                    adf_to_text(body)
+                    if isinstance(body, dict) and is_adf_doc(body)
+                    else str(body or "")
+                ),
+            )
+        )
+    total = data.get("total")
+    return CommentPage(comments=comments, total=total if isinstance(total, int) else len(comments))
+
+
+async def get_all_fields(client: JiraClient) -> list[FieldMeta]:
+    """Every field on the site (system and custom), for resolving names to field IDs."""
+    response = await client.get("/rest/api/3/field")
+    data = response.json()
+    if not isinstance(data, list):
+        raise JiraAPIError("Jira field list response is not a list")
+    return [
+        FieldMeta(field_id=str(f["id"]), name=str(f.get("name") or f["id"]))
+        for f in data
+        if isinstance(f, dict) and "id" in f
+    ]
+
+
+async def search_issues(
+    client: JiraClient, jql: str, field_ids: list[str], max_results: int
+) -> SearchResult:
+    """POST /rest/api/3/search/jql, following nextPageToken until max_results issues."""
+    hits: list[SearchHit] = []
+    next_token: str | None = None
+    while True:
+        body: dict[str, Any] = {
+            "jql": jql,
+            "fields": field_ids,
+            "maxResults": min(max_results - len(hits), _SEARCH_MAX_PAGE_SIZE),
+        }
+        if next_token:
+            body["nextPageToken"] = next_token
+        # Search is a read even though it is a POST, so it may be retried on network errors.
+        response = await client.post("/rest/api/3/search/jql", idempotent=True, json=body)
+        data: dict[str, Any] = response.json()
+        page = [i for i in data.get("issues") or [] if isinstance(i, dict) and i.get("key")]
+        hits.extend(SearchHit(key=str(raw["key"]), fields=raw.get("fields") or {}) for raw in page)
+        next_token = data.get("nextPageToken") or None
+        if len(hits) >= max_results or not next_token or not page:
+            more_pages = bool(next_token) and bool(page)
+            return SearchResult(
+                issues=hits[:max_results],
+                truncated=len(hits) > max_results or more_pages,
+            )
 
 
 async def _paginate_meta(client: JiraClient, path: str, list_keys: tuple[str, ...]) -> list[Any]:

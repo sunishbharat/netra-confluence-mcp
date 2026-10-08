@@ -34,6 +34,7 @@ COPY server.py      ./
 COPY exceptions.py  ./
 COPY confluence/    ./confluence/
 COPY models/        ./models/
+COPY netra_jira/    ./netra_jira/
 
 # Baked-in defaults (all overridable via env vars; SERVER_PORT set in entrypoint.sh)
 ENV SERVER_TRANSPORT=http \
